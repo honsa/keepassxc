@@ -24,6 +24,7 @@
 #include <QMainWindow>
 #include <QProgressBar>
 #include <QSystemTrayIcon>
+#include <QTimer>
 
 #include "core/SignalMultiplexer.h"
 #include "gui/DatabaseWidget.h"
@@ -48,10 +49,11 @@ class MainWindow : public QMainWindow
 
 public:
     MainWindow();
-    ~MainWindow();
+    ~MainWindow() override;
 
     QList<DatabaseWidget*> getOpenDatabases();
     void restoreConfigState();
+    void setAllowScreenCapture(bool state);
 
     enum StackedWidgetIndex
     {
@@ -69,6 +71,8 @@ signals:
 public slots:
     void openDatabase(const QString& filePath, const QString& password = {}, const QString& keyfile = {});
     void appExit();
+    bool isHardwareKeySupported();
+    bool refreshHardwareKeys();
     void displayGlobalMessage(const QString& text,
                               MessageWidget::MessageType type,
                               bool showClosebutton = true,
@@ -93,6 +97,8 @@ public slots:
     void restartApp(const QString& message);
 
 protected:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
@@ -119,22 +125,19 @@ private slots:
     void switchToNewDatabase();
     void switchToOpenDatabase();
     void switchToDatabaseFile(const QString& file);
-    void switchToKeePass1Database();
-    void switchToOpVaultDatabase();
-    void switchToCsvImport();
     void databaseStatusChanged(DatabaseWidget* dbWidget);
     void databaseTabChanged(int tabIndex);
     void openRecentDatabase(QAction* action);
     void clearLastDatabases();
     void updateLastDatabasesMenu();
     void updateCopyAttributesMenu();
+    void updateSetTagsMenu();
     void showEntryContextMenu(const QPoint& globalPos);
     void showGroupContextMenu(const QPoint& globalPos);
     void applySettingsChanges();
     void trayIconTriggered(QSystemTrayIcon::ActivationReason reason);
     void processTrayIconTrigger();
     void lockDatabasesAfterInactivity();
-    void forgetTouchIDAfterInactivity();
     void handleScreenLock();
     void showErrorMessage(const QString& message);
     void selectNextDatabaseTab();
@@ -145,11 +148,10 @@ private slots:
     void agentEnabled(bool enabled);
     void updateTrayIcon();
     void updateProgressBar(int percentage, QString message);
+    void updateEntryCountLabel();
     void focusSearchWidget();
 
 private:
-    static void setShortcut(QAction* action, QKeySequence::StandardKey standard, int fallback = 0);
-
     static const QString BaseWindowTitle;
 
     void saveWindowInformation();
@@ -162,6 +164,7 @@ private:
     void dropEvent(QDropEvent* event) override;
 
     void initViewMenu();
+    void initActionCollection();
 
     const QScopedPointer<Ui::MainWindow> m_ui;
     SignalMultiplexer m_actionMultiplexer;
@@ -171,6 +174,7 @@ private:
     QPointer<QMenu> m_entryNewContextMenu;
     QPointer<QActionGroup> m_lastDatabasesActions;
     QPointer<QActionGroup> m_copyAdditionalAttributeActions;
+    QPointer<QActionGroup> m_setTagsMenuActions;
     QPointer<InactivityTimer> m_inactivityTimer;
     QPointer<InactivityTimer> m_touchIDinactivityTimer;
     int m_countDefaultAttributes;
@@ -179,6 +183,7 @@ private:
     QPointer<SearchWidget> m_searchWidget;
     QPointer<QProgressBar> m_progressBar;
     QPointer<QLabel> m_progressBarLabel;
+    QPointer<QLabel> m_statusBarLabel;
 
     Q_DISABLE_COPY(MainWindow)
 
@@ -187,6 +192,7 @@ private:
     bool m_restartRequested = false;
     bool m_contextMenuFocusLock = false;
     bool m_showToolbarSeparator = false;
+    bool m_allowScreenCapture = false;
     qint64 m_lastFocusOutTime = 0;
     qint64 m_lastShowTime = 0;
     QTimer m_updateCheckTimer;

@@ -1,4 +1,4 @@
-#  Copyright (C) 2018 KeePassXC Team <team@keepassxc.org>
+#  Copyright (C) 2023 KeePassXC Team <team@keepassxc.org>
 #  Copyright (C) 2010 Felix Geyer <debfx@fobos.de>
 #
 #  This program is free software: you can redistribute it and/or modify
@@ -75,6 +75,8 @@ macro(add_unit_test)
         add_test(${_test_NAME} ${_test_LAUNCHER} ${_test_NAME})
     endif(KDE4_TEST_OUTPUT STREQUAL "xml")
 
+    set_tests_properties(${_test_NAME} PROPERTIES ENVIRONMENT "LANG=en_US.UTF-8")
+
     if(NOT MSVC_IDE)   #not needed for the ide
         # if the tests are EXCLUDE_FROM_ALL, add a target "buildtests" to build all tests
         if(NOT WITH_TESTS)
@@ -125,11 +127,6 @@ add_unit_test(NAME testcryptohash SOURCES TestCryptoHash.cpp
 add_unit_test(NAME testsymmetriccipher SOURCES TestSymmetricCipher.cpp
         LIBS ${TEST_LIBRARIES})
 
-if(WITH_XC_KEESHARE)
-    add_unit_test(NAME testsignature SOURCES TestSignature.cpp
-            LIBS ${TEST_LIBRARIES})
-endif()
-
 add_unit_test(NAME testhashedblockstream SOURCES TestHashedBlockStream.cpp
         LIBS testsupport ${TEST_LIBRARIES})
 
@@ -145,7 +142,7 @@ add_unit_test(NAME testdeletedobjects SOURCES TestDeletedObjects.cpp
 add_unit_test(NAME testkeepass1reader SOURCES TestKeePass1Reader.cpp
         LIBS ${TEST_LIBRARIES})
 
-add_unit_test(NAME testopvaultreader SOURCES TestOpVaultReader.cpp
+add_unit_test(NAME testimports SOURCES TestImports.cpp
               LIBS ${TEST_LIBRARIES})
 
 if(WITH_XC_NETWORKING)
@@ -234,13 +231,27 @@ endif()
 if(WITH_XC_BROWSER)
     add_unit_test(NAME testbrowser SOURCES TestBrowser.cpp
         LIBS ${TEST_LIBRARIES})
+
+    if(WITH_XC_BROWSER_PASSKEYS)
+        # Prevent duplicate linking with macOS
+        if(APPLE)
+            add_unit_test(NAME testpasskeys SOURCES TestPasskeys.cpp
+                    LIBS ${TEST_LIBRARIES})
+        else()
+            add_unit_test(NAME testpasskeys SOURCES TestPasskeys.cpp
+                    LIBS keepassxcbrowser ${TEST_LIBRARIES})
+        endif()
+    endif()
 endif()
 
+if(WITH_XC_NETWORKING OR WITH_XC_BROWSER)
+    add_unit_test(NAME testurltools SOURCES TestUrlTools.cpp LIBS ${TEST_LIBRARIES})
+endif()
+
+add_unit_test(NAME testcli SOURCES TestCli.cpp
+        LIBS testsupport cli ${TEST_LIBRARIES})
+target_compile_definitions(testcli PRIVATE KEEPASSX_CLI_PATH="$<TARGET_FILE:keepassxc-cli>")
 
 if(WITH_GUI_TESTS)
-    # CLI clip tests need X environment on Linux
-    add_unit_test(NAME testcli SOURCES TestCli.cpp
-            LIBS testsupport cli ${TEST_LIBRARIES})
-
     add_subdirectory(gui)
 endif(WITH_GUI_TESTS)

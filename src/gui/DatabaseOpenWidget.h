@@ -19,10 +19,15 @@
 #ifndef KEEPASSX_DATABASEOPENWIDGET_H
 #define KEEPASSX_DATABASEOPENWIDGET_H
 
+#include <QPointer>
 #include <QScopedPointer>
 #include <QTimer>
 
+#include "config-keepassx.h"
 #include "gui/DialogyWidget.h"
+#ifdef WITH_XC_YUBIKEY
+#include "osutils/DeviceListener.h"
+#endif
 
 class CompositeKey;
 class Database;
@@ -39,20 +44,28 @@ class DatabaseOpenWidget : public DialogyWidget
 
 public:
     explicit DatabaseOpenWidget(QWidget* parent = nullptr);
-    ~DatabaseOpenWidget();
+    ~DatabaseOpenWidget() override;
     void load(const QString& filename);
     QString filename();
     void clearForms();
     void enterKey(const QString& pw, const QString& keyFile);
     QSharedPointer<Database> database();
+    bool unlockingDatabase();
+
+    // Quick Unlock helper functions
+    bool canPerformQuickUnlock() const;
+    bool isOnQuickUnlockScreen() const;
+    void toggleQuickUnlockScreen();
+    void triggerQuickUnlock();
+    void resetQuickUnlock();
 
 signals:
     void dialogFinished(bool accepted);
 
 protected:
-    void showEvent(QShowEvent* event) override;
-    void hideEvent(QHideEvent* event) override;
+    bool event(QEvent* event) override;
     QSharedPointer<CompositeKey> buildDatabaseKey();
+    void setUserInteractionLock(bool state);
 
     const QScopedPointer<Ui::DatabaseOpenWidget> m_ui;
     QSharedPointer<Database> m_db;
@@ -64,16 +77,22 @@ protected slots:
     void reject();
 
 private slots:
-    void browseKeyFile();
-    void clearKeyFileText();
-    void pollHardwareKey();
+    bool browseKeyFile();
+    void toggleKeyFileComponent(bool state);
+    void toggleHardwareKeyComponent(bool state);
+    void pollHardwareKey(bool manualTrigger = false);
     void hardwareKeyResponse(bool found);
-    void openHardwareKeyHelp();
-    void openKeyFileHelp();
 
 private:
+#ifdef WITH_XC_YUBIKEY
+    QPointer<DeviceListener> m_deviceListener;
+#endif
     bool m_pollingHardwareKey = false;
+    bool m_manualHardwareKeyRefresh = false;
+    bool m_blockQuickUnlock = false;
+    bool m_unlockingDatabase = false;
     QTimer m_hideTimer;
+    QTimer m_hideNoHardwareKeysFoundTimer;
 
     Q_DISABLE_COPY(DatabaseOpenWidget)
 };

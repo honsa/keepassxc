@@ -47,10 +47,14 @@ private slots:
     void testAdd();
     void testAddGroup();
     void testAnalyze();
+    void testAttachmentExport();
+    void testAttachmentImport();
+    void testAttachmentRemove();
     void testClip();
     void testCommandParsing_data();
     void testCommandParsing();
     void testCreate();
+    void testDatabaseEdit();
     void testDiceware();
     void testEdit();
     void testEstimate_data();
@@ -76,6 +80,7 @@ private slots:
     void testShow();
     void testInvalidDbFiles();
     void testYubiKeyOption();
+    void testNonAscii();
 
 private:
     QScopedPointer<QFile> m_devNull;
@@ -86,6 +91,7 @@ private:
     QScopedPointer<TemporaryFile> m_keyFileProtectedDbFile;
     QScopedPointer<TemporaryFile> m_keyFileProtectedNoPasswordDbFile;
     QScopedPointer<TemporaryFile> m_yubiKeyProtectedDbFile;
+    QScopedPointer<TemporaryFile> m_nonAsciiDbFile;
 
     QScopedPointer<QBuffer> m_stdout;
     QScopedPointer<QBuffer> m_stderr;

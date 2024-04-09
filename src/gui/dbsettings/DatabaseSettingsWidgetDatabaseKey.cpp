@@ -17,7 +17,9 @@
 
 #include "DatabaseSettingsWidgetDatabaseKey.h"
 
+#include "core/Config.h"
 #include "core/Database.h"
+#include "core/PasswordHealth.h"
 #include "gui/MessageBox.h"
 #include "gui/databasekey/KeyFileEditWidget.h"
 #include "gui/databasekey/PasswordEditWidget.h"
@@ -25,6 +27,7 @@
 #include "keys/ChallengeResponseKey.h"
 #include "keys/FileKey.h"
 #include "keys/PasswordKey.h"
+#include "quickunlock/QuickUnlockInterface.h"
 
 #include <QLayout>
 #include <QPushButton>
@@ -41,6 +44,7 @@ DatabaseSettingsWidgetDatabaseKey::DatabaseSettingsWidgetDatabaseKey(QWidget* pa
 {
     auto* vbox = new QVBoxLayout(this);
     vbox->setSizeConstraint(QLayout::SetMinimumSize);
+    vbox->setSpacing(20);
 
     // primary password option
     vbox->addWidget(m_passwordEditWidget);
@@ -52,6 +56,7 @@ DatabaseSettingsWidgetDatabaseKey::DatabaseSettingsWidgetDatabaseKey(QWidget* pa
     vbox->setSizeConstraint(QLayout::SetMinimumSize);
     m_additionalKeyOptions->setLayout(new QVBoxLayout());
     m_additionalKeyOptions->layout()->setMargin(0);
+    m_additionalKeyOptions->layout()->setSpacing(20);
     m_additionalKeyOptions->layout()->addWidget(m_keyFileEditWidget);
 #ifdef WITH_XC_YUBIKEY
     m_additionalKeyOptions->layout()->addWidget(m_yubiKeyEditWidget);
@@ -64,9 +69,7 @@ DatabaseSettingsWidgetDatabaseKey::DatabaseSettingsWidgetDatabaseKey(QWidget* pa
     setLayout(vbox);
 }
 
-DatabaseSettingsWidgetDatabaseKey::~DatabaseSettingsWidgetDatabaseKey()
-{
-}
+DatabaseSettingsWidgetDatabaseKey::~DatabaseSettingsWidgetDatabaseKey() = default;
 
 void DatabaseSettingsWidgetDatabaseKey::load(QSharedPointer<Database> db)
 {
@@ -154,6 +157,7 @@ bool DatabaseSettingsWidgetDatabaseKey::save()
         }
     }
 
+    // Show warning if database password has not been set
     if (m_passwordEditWidget->visiblePage() == KeyComponentWidget::Page::AddNew || m_passwordEditWidget->isEmpty()) {
         QScopedPointer<QMessageBox> msgBox(new QMessageBox(this));
         msgBox->setIcon(QMessageBox::Warning);
@@ -164,11 +168,39 @@ bool DatabaseSettingsWidgetDatabaseKey::save()
         auto btn = msgBox->addButton(tr("Continue without password"), QMessageBox::ButtonRole::AcceptRole);
         msgBox->addButton(QMessageBox::Cancel);
         msgBox->setDefaultButton(QMessageBox::Cancel);
+        msgBox->layout()->setSizeConstraint(QLayout::SetMinimumSize);
         msgBox->exec();
         if (msgBox->clickedButton() != btn) {
             return false;
         }
     } else if (!addToCompositeKey(m_passwordEditWidget, newKey, oldPasswordKey)) {
+        return false;
+    }
+
+    // Show warning if database password is weak
+    if (!m_passwordEditWidget->isEmpty()
+        && m_passwordEditWidget->getPasswordQuality() < PasswordHealth::Quality::Good) {
+        auto dialogResult = MessageBox::warning(this,
+                                                tr("Weak password"),
+                                                tr("This is a weak password! For better protection of your secrets, "
+                                                   "you should choose a stronger password."),
+                                                MessageBox::ContinueWithWeakPass | MessageBox::Cancel,
+                                                MessageBox::Cancel);
+
+        if (dialogResult == MessageBox::Cancel) {
+            return false;
+        }
+    }
+
+    // If enforced in the config file, deny users from continuing with a weak password
+    auto minQuality =
+        static_cast<PasswordHealth::Quality>(config()->get(Config::Security_DatabasePasswordMinimumQuality).toInt());
+    if (!m_passwordEditWidget->isEmpty() && m_passwordEditWidget->getPasswordQuality() < minQuality) {
+        MessageBox::critical(this,
+                             tr("Weak password"),
+                             tr("You must enter a stronger password to protect your database."),
+                             MessageBox::Ok,
+                             MessageBox::Ok);
         return false;
     }
 
@@ -192,6 +224,8 @@ bool DatabaseSettingsWidgetDatabaseKey::save()
     }
 
     m_db->setKey(newKey, true, false, false);
+
+    getQuickUnlock()->reset(m_db->publicUuid());
 
     emit editFinished(true);
     if (m_isDirty) {

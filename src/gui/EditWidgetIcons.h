@@ -62,7 +62,7 @@ class EditWidgetIcons : public QWidget
 
 public:
     explicit EditWidgetIcons(QWidget* parent = nullptr);
-    ~EditWidgetIcons();
+    ~EditWidgetIcons() override;
 
     IconStruct state();
     void reset();
@@ -71,6 +71,9 @@ public:
               const IconStruct& iconStruct,
               const QString& url = "");
     void setShowApplyIconToButton(bool state);
+
+protected:
+    void keyPressEvent(QKeyEvent* event) override;
 
 public slots:
     void setUrl(const QString& url);
@@ -85,7 +88,7 @@ private slots:
     void downloadFavicon();
     void iconReceived(const QString& url, const QImage& icon);
     void addCustomIconFromFile();
-    bool addCustomIcon(const QImage& icon);
+    bool addCustomIcon(const QImage& icon, const QString& name = {});
     void updateWidgetsDefaultIcons(bool checked);
     void updateWidgetsCustomIcons(bool checked);
     void updateRadioButtonDefaultIcons();
@@ -102,8 +105,7 @@ private:
     DefaultIconModel* const m_defaultIconModel;
     CustomIconModel* const m_customIconModel;
 #ifdef WITH_XC_NETWORKING
-    QScopedPointer<IconDownloader> m_downloader;
-    QString m_url;
+    QSharedPointer<IconDownloader> m_downloader;
 #endif
 
     Q_DISABLE_COPY(EditWidgetIcons)

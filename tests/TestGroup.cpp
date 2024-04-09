@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2023 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2010 Felix Geyer <debfx@fobos.de>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -56,9 +56,9 @@ void TestGroup::cleanup()
 
 void TestGroup::testParenting()
 {
-    Database* db = new Database();
+    auto db = new Database();
     QPointer<Group> rootGroup = db->rootGroup();
-    Group* tmpRoot = new Group();
+    auto tmpRoot = new Group();
 
     QPointer<Group> g1 = new Group();
     QPointer<Group> g2 = new Group();
@@ -98,8 +98,8 @@ void TestGroup::testParenting()
     QVERIFY(g1->children().at(1) == g3);
     QVERIFY(g3->children().contains(g4));
 
-    Group* g5 = new Group();
-    Group* g6 = new Group();
+    auto g5 = new Group();
+    auto g6 = new Group();
     g5->setParent(db->rootGroup());
     g6->setParent(db->rootGroup());
     QVERIFY(db->rootGroup()->children().at(1) == g5);
@@ -129,8 +129,8 @@ void TestGroup::testParenting()
 
 void TestGroup::testSignals()
 {
-    Database* db = new Database();
-    Database* db2 = new Database();
+    auto db = new Database();
+    auto db2 = new Database();
     QPointer<Group> root = db->rootGroup();
 
     QSignalSpy spyAboutToAdd(db, SIGNAL(groupAboutToAdd(Group*, int)));
@@ -147,8 +147,8 @@ void TestGroup::testSignals()
     QSignalSpy spyAboutToMove2(db2, SIGNAL(groupAboutToMove(Group*, Group*, int)));
     QSignalSpy spyMoved2(db2, SIGNAL(groupMoved()));
 
-    Group* g1 = new Group();
-    Group* g2 = new Group();
+    auto g1 = new Group();
+    auto g2 = new Group();
 
     g1->setParent(root);
     QCOMPARE(spyAboutToAdd.count(), 1);
@@ -212,8 +212,8 @@ void TestGroup::testSignals()
     QCOMPARE(spyAboutToMove2.count(), 0);
     QCOMPARE(spyMoved2.count(), 0);
 
-    Group* g3 = new Group();
-    Group* g4 = new Group();
+    auto g3 = new Group();
+    auto g4 = new Group();
 
     g3->setParent(root);
     QCOMPARE(spyAboutToAdd.count(), 3);
@@ -247,7 +247,7 @@ void TestGroup::testSignals()
 
 void TestGroup::testEntries()
 {
-    Group* group = new Group();
+    auto group = new Group();
 
     QPointer<Entry> entry1 = new Entry();
     entry1->setGroup(group);
@@ -269,8 +269,8 @@ void TestGroup::testDeleteSignals()
 {
     QScopedPointer<Database> db(new Database());
     Group* groupRoot = db->rootGroup();
-    Group* groupChild = new Group();
-    Group* groupChildChild = new Group();
+    auto groupChild = new Group();
+    auto groupChildChild = new Group();
     groupRoot->setObjectName("groupRoot");
     groupChild->setObjectName("groupChild");
     groupChildChild->setObjectName("groupChildChild");
@@ -284,8 +284,8 @@ void TestGroup::testDeleteSignals()
     QCOMPARE(spyAboutToRemove.count(), 2);
     QCOMPARE(spyRemoved.count(), 2);
 
-    Group* group = new Group();
-    Entry* entry = new Entry();
+    auto group = new Group();
+    auto entry = new Entry();
     entry->setGroup(group);
     QSignalSpy spyEntryAboutToRemove(group, SIGNAL(entryAboutToRemove(Entry*)));
     QSignalSpy spyEntryRemoved(group, SIGNAL(entryRemoved(Entry*)));
@@ -298,9 +298,9 @@ void TestGroup::testDeleteSignals()
 
     QScopedPointer<Database> db2(new Database());
     Group* groupRoot2 = db2->rootGroup();
-    Group* group2 = new Group();
+    auto group2 = new Group();
     group2->setParent(groupRoot2);
-    Entry* entry2 = new Entry();
+    auto entry2 = new Entry();
     entry2->setGroup(group2);
     QSignalSpy spyEntryAboutToRemove2(group2, SIGNAL(entryAboutToRemove(Entry*)));
     QSignalSpy spyEntryRemoved2(group2, SIGNAL(entryRemoved(Entry*)));
@@ -315,36 +315,38 @@ void TestGroup::testCopyCustomIcon()
     QScopedPointer<Database> dbSource(new Database());
 
     QUuid groupIconUuid = QUuid::createUuid();
-    QImage groupIcon(16, 16, QImage::Format_RGB32);
-    groupIcon.setPixel(0, 0, qRgb(255, 0, 0));
-    dbSource->metadata()->addCustomIcon(groupIconUuid, groupIcon);
+    QByteArray groupIcon("group icon");
+    QString groupIconName("group icon");
+    dbSource->metadata()->addCustomIcon(groupIconUuid, groupIcon, groupIconName);
 
     QUuid entryIconUuid = QUuid::createUuid();
-    QImage entryIcon(16, 16, QImage::Format_RGB32);
-    entryIcon.setPixel(0, 0, qRgb(255, 0, 0));
-    dbSource->metadata()->addCustomIcon(entryIconUuid, entryIcon);
+    QByteArray entryIcon("entry icon");
+    QString entryIconName("entry icon");
+    dbSource->metadata()->addCustomIcon(entryIconUuid, entryIcon, entryIconName);
 
-    Group* group = new Group();
+    auto* group = new Group();
     group->setParent(dbSource->rootGroup());
     group->setIcon(groupIconUuid);
-    QCOMPARE(group->icon(), groupIcon);
+    QCOMPARE(group->database()->metadata()->customIcon(groupIconUuid).data, groupIcon);
+    QCOMPARE(group->database()->metadata()->customIcon(groupIconUuid).name, groupIconName);
 
-    Entry* entry = new Entry();
+    auto* entry = new Entry();
     entry->setGroup(dbSource->rootGroup());
     entry->setIcon(entryIconUuid);
-    QCOMPARE(entry->icon(), entryIcon);
+    QCOMPARE(entry->database()->metadata()->customIcon(entryIconUuid).data, entryIcon);
+    QCOMPARE(entry->database()->metadata()->customIcon(entryIconUuid).name, entryIconName);
 
     QScopedPointer<Database> dbTarget(new Database());
 
     group->setParent(dbTarget->rootGroup());
     QVERIFY(dbTarget->metadata()->hasCustomIcon(groupIconUuid));
-    QCOMPARE(dbTarget->metadata()->customIcon(groupIconUuid), groupIcon);
-    QCOMPARE(group->icon(), groupIcon);
+    QCOMPARE(dbTarget->metadata()->customIcon(groupIconUuid).data, groupIcon);
+    QCOMPARE(dbTarget->metadata()->customIcon(groupIconUuid).name, groupIconName);
 
     entry->setGroup(dbTarget->rootGroup());
     QVERIFY(dbTarget->metadata()->hasCustomIcon(entryIconUuid));
-    QCOMPARE(dbTarget->metadata()->customIcon(entryIconUuid), entryIcon);
-    QCOMPARE(entry->icon(), entryIcon);
+    QCOMPARE(dbTarget->metadata()->customIcon(entryIconUuid).data, entryIcon);
+    QCOMPARE(dbTarget->metadata()->customIcon(entryIconUuid).name, entryIconName);
 }
 
 void TestGroup::testClone()
@@ -425,39 +427,36 @@ void TestGroup::testCopyCustomIcons()
     QScopedPointer<Database> dbSource(new Database());
     QScopedPointer<Database> dbTarget(new Database());
 
-    QImage iconImage1(1, 1, QImage::Format_RGB32);
-    iconImage1.setPixel(0, 0, qRgb(1, 2, 3));
-
-    QImage iconImage2(1, 1, QImage::Format_RGB32);
-    iconImage2.setPixel(0, 0, qRgb(4, 5, 6));
+    Metadata::CustomIconData icon1 = {QByteArray("icon 1"), "icon 1", Clock::currentDateTimeUtc()};
+    Metadata::CustomIconData icon2 = {QByteArray("icon 2"), "icon 2", Clock::currentDateTimeUtc()};
 
     QScopedPointer<Group> group1(new Group());
     group1->setParent(dbSource->rootGroup());
     QUuid group1Icon = QUuid::createUuid();
-    dbSource->metadata()->addCustomIcon(group1Icon, iconImage1);
+    dbSource->metadata()->addCustomIcon(group1Icon, icon1);
     group1->setIcon(group1Icon);
 
     QScopedPointer<Group> group2(new Group());
     group2->setParent(group1.data());
     QUuid group2Icon = QUuid::createUuid();
-    dbSource->metadata()->addCustomIcon(group2Icon, iconImage1);
+    dbSource->metadata()->addCustomIcon(group2Icon, icon1);
     group2->setIcon(group2Icon);
 
     QScopedPointer<Entry> entry1(new Entry());
     entry1->setGroup(group2.data());
     QUuid entry1IconOld = QUuid::createUuid();
-    dbSource->metadata()->addCustomIcon(entry1IconOld, iconImage1);
+    dbSource->metadata()->addCustomIcon(entry1IconOld, icon1);
     entry1->setIcon(entry1IconOld);
 
     // add history item
     entry1->beginUpdate();
     QUuid entry1IconNew = QUuid::createUuid();
-    dbSource->metadata()->addCustomIcon(entry1IconNew, iconImage1);
+    dbSource->metadata()->addCustomIcon(entry1IconNew, icon1);
     entry1->setIcon(entry1IconNew);
     entry1->endUpdate();
 
     // test that we don't overwrite icons
-    dbTarget->metadata()->addCustomIcon(group2Icon, iconImage2);
+    dbTarget->metadata()->addCustomIcon(group2Icon, icon1);
 
     dbTarget->metadata()->copyCustomIcons(group1->customIconsRecursive(), dbSource->metadata());
 
@@ -469,23 +468,23 @@ void TestGroup::testCopyCustomIcons()
     QVERIFY(metaTarget->hasCustomIcon(entry1IconOld));
     QVERIFY(metaTarget->hasCustomIcon(entry1IconNew));
 
-    QCOMPARE(metaTarget->customIcon(group1Icon).pixel(0, 0), qRgb(1, 2, 3));
-    QCOMPARE(metaTarget->customIcon(group2Icon).pixel(0, 0), qRgb(4, 5, 6));
+    QCOMPARE(metaTarget->customIcon(group1Icon), icon1);
+    QCOMPARE(metaTarget->customIcon(group2Icon), icon1);
 }
 
 void TestGroup::testFindEntry()
 {
     QScopedPointer<Database> db(new Database());
 
-    Entry* entry1 = new Entry();
+    auto entry1 = new Entry();
     entry1->setTitle(QString("entry1"));
     entry1->setGroup(db->rootGroup());
     entry1->setUuid(QUuid::createUuid());
 
-    Group* group1 = new Group();
+    auto group1 = new Group();
     group1->setName("group1");
 
-    Entry* entry2 = new Entry();
+    auto entry2 = new Entry();
 
     entry2->setTitle(QString("entry2"));
     entry2->setGroup(group1);
@@ -559,11 +558,11 @@ void TestGroup::testFindGroupByPath()
 {
     QScopedPointer<Database> db(new Database());
 
-    Group* group1 = new Group();
+    auto group1 = new Group();
     group1->setName("group1");
     group1->setParent(db->rootGroup());
 
-    Group* group2 = new Group();
+    auto group2 = new Group();
     group2->setName("group2");
     group2->setParent(group1);
 
@@ -627,7 +626,7 @@ void TestGroup::testPrint()
     output = db->rootGroup()->print(true);
     QCOMPARE(output, QString("[empty]\n"));
 
-    Entry* entry1 = new Entry();
+    auto entry1 = new Entry();
     entry1->setTitle(QString("entry1"));
     entry1->setGroup(db->rootGroup());
     entry1->setUuid(QUuid::createUuid());
@@ -635,24 +634,24 @@ void TestGroup::testPrint()
     output = db->rootGroup()->print();
     QCOMPARE(output, QString("entry1\n"));
 
-    Group* group1 = new Group();
+    auto group1 = new Group();
     group1->setName("group1");
     group1->setParent(db->rootGroup());
 
-    Entry* entry2 = new Entry();
+    auto entry2 = new Entry();
     entry2->setTitle(QString("entry2"));
     entry2->setGroup(group1);
     entry2->setUuid(QUuid::createUuid());
 
-    Group* group2 = new Group();
+    auto group2 = new Group();
     group2->setName("group2");
     group2->setParent(db->rootGroup());
 
-    Group* subGroup = new Group();
+    auto subGroup = new Group();
     subGroup->setName("subgroup");
     subGroup->setParent(group2);
 
-    Entry* entry3 = new Entry();
+    auto entry3 = new Entry();
     entry3->setTitle(QString("entry3"));
     entry3->setGroup(subGroup);
     entry3->setUuid(QUuid::createUuid());
@@ -692,13 +691,13 @@ void TestGroup::testPrint()
 
 void TestGroup::testAddEntryWithPath()
 {
-    Database* db = new Database();
+    auto db = new Database();
 
-    Group* group1 = new Group();
+    auto group1 = new Group();
     group1->setName("group1");
     group1->setParent(db->rootGroup());
 
-    Group* group2 = new Group();
+    auto group2 = new Group();
     group2->setName("group2");
     group2->setParent(group1);
 
@@ -743,19 +742,19 @@ void TestGroup::testIsRecycled()
     Database db;
     db.metadata()->setRecycleBinEnabled(true);
 
-    Group* group1 = new Group();
+    auto group1 = new Group();
     group1->setName("group1");
     group1->setParent(db.rootGroup());
 
-    Group* group2 = new Group();
+    auto group2 = new Group();
     group2->setName("group2");
     group2->setParent(db.rootGroup());
 
-    Group* group3 = new Group();
+    auto group3 = new Group();
     group3->setName("group3");
     group3->setParent(group2);
 
-    Group* group4 = new Group();
+    auto group4 = new Group();
     group4->setName("group4");
     group4->setParent(db.rootGroup());
 
@@ -815,64 +814,64 @@ void TestGroup::testEquals()
 void TestGroup::testChildrenSort()
 {
     auto createTestGroupWithUnorderedChildren = []() -> Group* {
-        Group* parent = new Group();
+        auto parent = new Group();
 
-        Group* group1 = new Group();
+        auto group1 = new Group();
         group1->setName("B");
         group1->setParent(parent);
-        Group* group2 = new Group();
+        auto group2 = new Group();
         group2->setName("e");
         group2->setParent(parent);
-        Group* group3 = new Group();
+        auto group3 = new Group();
         group3->setName("Test999");
         group3->setParent(parent);
-        Group* group4 = new Group();
+        auto group4 = new Group();
         group4->setName("A");
         group4->setParent(parent);
-        Group* group5 = new Group();
+        auto group5 = new Group();
         group5->setName("z");
         group5->setParent(parent);
-        Group* group6 = new Group();
+        auto group6 = new Group();
         group6->setName("045");
         group6->setParent(parent);
-        Group* group7 = new Group();
+        auto group7 = new Group();
         group7->setName("60");
         group7->setParent(parent);
-        Group* group8 = new Group();
+        auto group8 = new Group();
         group8->setName("04test");
         group8->setParent(parent);
-        Group* group9 = new Group();
+        auto group9 = new Group();
         group9->setName("Test12");
         group9->setParent(parent);
-        Group* group10 = new Group();
+        auto group10 = new Group();
         group10->setName("i");
         group10->setParent(parent);
 
-        Group* subGroup1 = new Group();
+        auto subGroup1 = new Group();
         subGroup1->setName("sub_xte");
         subGroup1->setParent(group10);
-        Group* subGroup2 = new Group();
+        auto subGroup2 = new Group();
         subGroup2->setName("sub_010");
         subGroup2->setParent(group10);
-        Group* subGroup3 = new Group();
+        auto subGroup3 = new Group();
         subGroup3->setName("sub_000");
         subGroup3->setParent(group10);
-        Group* subGroup4 = new Group();
+        auto subGroup4 = new Group();
         subGroup4->setName("sub_M");
         subGroup4->setParent(group10);
-        Group* subGroup5 = new Group();
+        auto subGroup5 = new Group();
         subGroup5->setName("sub_p");
         subGroup5->setParent(group10);
-        Group* subGroup6 = new Group();
+        auto subGroup6 = new Group();
         subGroup6->setName("sub_45p");
         subGroup6->setParent(group10);
-        Group* subGroup7 = new Group();
+        auto subGroup7 = new Group();
         subGroup7->setName("sub_6p");
         subGroup7->setParent(group10);
-        Group* subGroup8 = new Group();
+        auto subGroup8 = new Group();
         subGroup8->setName("sub_tt");
         subGroup8->setParent(group10);
-        Group* subGroup9 = new Group();
+        auto subGroup9 = new Group();
         subGroup9->setName("sub_t0");
         subGroup9->setParent(group10);
 
@@ -997,11 +996,11 @@ void TestGroup::testHierarchy()
     Group group1;
     group1.setName("group1");
 
-    Group* group2 = new Group();
+    auto group2 = new Group();
     group2->setName("group2");
     group2->setParent(&group1);
 
-    Group* group3 = new Group();
+    auto group3 = new Group();
     group3->setName("group3");
     group3->setParent(group2);
 
@@ -1029,12 +1028,12 @@ void TestGroup::testApplyGroupIconRecursively()
     // Create a database with two nested groups with one entry each
     Database database;
 
-    Group* subgroup = new Group();
+    auto subgroup = new Group();
     subgroup->setName("Subgroup");
     subgroup->setParent(database.rootGroup());
     QVERIFY(subgroup);
 
-    Group* subsubgroup = new Group();
+    auto subsubgroup = new Group();
     subsubgroup->setName("Subsubgroup");
     subsubgroup->setParent(subgroup);
     QVERIFY(subsubgroup);
@@ -1075,21 +1074,18 @@ void TestGroup::testApplyGroupIconRecursively()
     // Set an icon per UUID to the subgroup and apply recursively
     // -> all groups and entries except the root group have the same icon
     const QUuid subgroupIconUuid = QUuid::createUuid();
-    QImage subgroupIcon(16, 16, QImage::Format_RGB32);
-    subgroupIcon.setPixel(0, 0, qRgb(255, 0, 0));
+    QByteArray subgroupIcon("subgroup icon");
+
     database.metadata()->addCustomIcon(subgroupIconUuid, subgroupIcon);
     subgroup->setIcon(subgroupIconUuid);
     subgroup->applyGroupIconToChildGroups();
     subgroup->applyGroupIconToChildEntries();
     QVERIFY(database.rootGroup()->iconNumber() == rootIconNumber);
     QCOMPARE(subgroup->iconUuid(), subgroupIconUuid);
-    QCOMPARE(subgroup->icon(), subgroupIcon);
     QCOMPARE(subgroupEntry->iconUuid(), subgroupIconUuid);
-    QCOMPARE(subgroupEntry->icon(), subgroupIcon);
     QCOMPARE(subsubgroup->iconUuid(), subgroupIconUuid);
-    QCOMPARE(subsubgroup->icon(), subgroupIcon);
     QCOMPARE(subsubgroupEntry->iconUuid(), subgroupIconUuid);
-    QCOMPARE(subsubgroupEntry->icon(), subgroupIcon);
+    QCOMPARE(subgroup->database()->metadata()->customIcon(subgroupIconUuid).data, subgroupIcon);
 
     // Reset all icons to root icon
     database.rootGroup()->setIcon(rootIconNumber);
@@ -1129,7 +1125,7 @@ void TestGroup::testUsernamesRecursive()
     Database database;
 
     // Create a subgroup
-    Group* subgroup = new Group();
+    auto subgroup = new Group();
     subgroup->setName("Subgroup");
     subgroup->setParent(database.rootGroup());
 
@@ -1150,22 +1146,22 @@ void TestGroup::testUsernamesRecursive()
     QVERIFY(usernames.indexOf("Name2") < usernames.indexOf("Name1"));
 }
 
-void TestGroup::testMove()
+void TestGroup::testMoveUpDown()
 {
     Database database;
     Group* root = database.rootGroup();
     QVERIFY(root);
 
-    Entry* entry0 = new Entry();
+    auto entry0 = new Entry();
     QVERIFY(entry0);
     entry0->setGroup(root);
-    Entry* entry1 = new Entry();
+    auto entry1 = new Entry();
     QVERIFY(entry1);
     entry1->setGroup(root);
-    Entry* entry2 = new Entry();
+    auto entry2 = new Entry();
     QVERIFY(entry2);
     entry2->setGroup(root);
-    Entry* entry3 = new Entry();
+    auto entry3 = new Entry();
     QVERIFY(entry3);
     entry3->setGroup(root);
     // default order, straight
@@ -1259,4 +1255,67 @@ void TestGroup::testMove()
     QCOMPARE(root->entries().at(1), entry2);
     QCOMPARE(root->entries().at(2), entry1);
     QCOMPARE(root->entries().at(3), entry0);
+}
+
+void TestGroup::testPreviousParentGroup()
+{
+    Database db;
+    auto* root = db.rootGroup();
+    root->setUuid(QUuid::createUuid());
+    QVERIFY(!root->uuid().isNull());
+    QVERIFY(!root->previousParentGroup());
+    QVERIFY(root->previousParentGroupUuid().isNull());
+
+    auto* group1 = new Group();
+    group1->setUuid(QUuid::createUuid());
+    group1->setParent(root);
+    QVERIFY(!group1->uuid().isNull());
+    QVERIFY(!group1->previousParentGroup());
+    QVERIFY(group1->previousParentGroupUuid().isNull());
+
+    auto* group2 = new Group();
+    group2->setParent(root);
+    group2->setUuid(QUuid::createUuid());
+    QVERIFY(!group2->uuid().isNull());
+    QVERIFY(!group2->previousParentGroup());
+    QVERIFY(group2->previousParentGroupUuid().isNull());
+
+    group1->setParent(group2);
+    QVERIFY(group1->previousParentGroupUuid() == root->uuid());
+    QVERIFY(group1->previousParentGroup() == root);
+
+    // Previous parent shouldn't be recorded if new and old parent are the same
+    group1->setParent(group2);
+    QVERIFY(group1->previousParentGroupUuid() == root->uuid());
+    QVERIFY(group1->previousParentGroup() == root);
+
+    group1->setParent(root);
+    QVERIFY(group1->previousParentGroupUuid() == group2->uuid());
+    QVERIFY(group1->previousParentGroup() == group2);
+}
+
+void TestGroup::testAutoTypeState()
+{
+    Database db;
+    auto* root = db.rootGroup();
+
+    auto* entry1 = new Entry();
+    entry1->setGroup(root);
+
+    auto subGroup = new Group();
+    subGroup->setParent(root);
+    auto* entry2 = new Entry();
+    entry2->setGroup(subGroup);
+
+    // Disable Auto-Type from root group
+    root->setAutoTypeEnabled(Group::TriState::Disable);
+    QVERIFY(!entry1->groupAutoTypeEnabled());
+    QVERIFY(!entry2->groupAutoTypeEnabled());
+
+    // Enable Auto-Type for sub group
+    subGroup->setAutoTypeEnabled(Group::TriState::Enable);
+    QVERIFY(root->autoTypeEnabled() == Group::TriState::Disable);
+    QVERIFY(subGroup->autoTypeEnabled() == Group::TriState::Enable);
+    QVERIFY(!entry1->groupAutoTypeEnabled());
+    QVERIFY(entry2->groupAutoTypeEnabled());
 }

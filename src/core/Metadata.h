@@ -1,5 +1,6 @@
 /*
  *  Copyright (C) 2010 Felix Geyer <debfx@fobos.de>
+ *  Copyright (C) 2021 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -19,9 +20,10 @@
 #define KEEPASSX_METADATA_H
 
 #include <QDateTime>
-#include <QIcon>
+#include <QHash>
 #include <QPointer>
 #include <QUuid>
+#include <QVariantMap>
 
 #include "core/CustomData.h"
 #include "core/Global.h"
@@ -60,6 +62,19 @@ public:
         bool protectNotes;
     };
 
+    struct CustomIconData
+    {
+        QByteArray data;
+        QString name;
+        QDateTime lastModified;
+
+        bool operator==(const CustomIconData& rhs) const
+        {
+            // Compare only actual icon data
+            return data == rhs.data;
+        }
+    };
+
     void init();
     void clear();
 
@@ -78,10 +93,8 @@ public:
     bool protectPassword() const;
     bool protectUrl() const;
     bool protectNotes() const;
-    QImage customIcon(const QUuid& uuid) const;
+    const CustomIconData& customIcon(const QUuid& uuid) const;
     bool hasCustomIcon(const QUuid& uuid) const;
-    QPixmap customIconPixmap(const QUuid& uuid, IconSize size = IconSize::Default) const;
-    QHash<QUuid, QPixmap> customIconsPixmaps(IconSize size = IconSize::Default) const;
     QList<QUuid> customIconsOrder() const;
     bool recycleBinEnabled() const;
     Group* recycleBin();
@@ -96,11 +109,13 @@ public:
     int databaseKeyChangeForce() const;
     int historyMaxItems() const;
     int historyMaxSize() const;
+    int autosaveDelayMin() const;
     CustomData* customData();
     const CustomData* customData() const;
 
     static const int DefaultHistoryMaxItems;
     static const int DefaultHistoryMaxSize;
+    static const int DefaultAutosaveDelayMin;
 
     void setGenerator(const QString& value);
     void setName(const QString& value);
@@ -117,10 +132,14 @@ public:
     void setProtectPassword(bool value);
     void setProtectUrl(bool value);
     void setProtectNotes(bool value);
-    void addCustomIcon(const QUuid& uuid, const QImage& image);
+    void addCustomIcon(const QUuid& uuid, const CustomIconData& iconData);
+    void addCustomIcon(const QUuid& uuid,
+                       const QByteArray& iconBytes,
+                       const QString& name = {},
+                       const QDateTime& lastModified = {});
     void removeCustomIcon(const QUuid& uuid);
     void copyCustomIcons(const QSet<QUuid>& iconList, const Metadata* otherMetadata);
-    QUuid findCustomIcon(const QImage& candidate);
+    QUuid findCustomIcon(const QByteArray& candidate);
     void setRecycleBinEnabled(bool value);
     void setRecycleBin(Group* group);
     void setRecycleBinChanged(const QDateTime& value);
@@ -133,7 +152,11 @@ public:
     void setMasterKeyChangeForce(int value);
     void setHistoryMaxItems(int value);
     void setHistoryMaxSize(int value);
+    void setAutosaveDelayMin(int value);
     void setUpdateDatetime(bool value);
+    void addSavedSearch(const QString& name, const QString& searchtext);
+    void deleteSavedSearch(const QString& name);
+    QVariantMap savedSearches();
     /*
      * Copy all attributes from other except:
      * - Group pointers/uuids
@@ -148,13 +171,12 @@ private:
     template <class P, class V> bool set(P& property, const V& value);
     template <class P, class V> bool set(P& property, const V& value, QDateTime& dateTime);
 
-    QByteArray hashImage(const QImage& image);
+    QByteArray hashIcon(const QByteArray& iconData);
 
     MetadataData m_data;
 
-    QHash<QUuid, QIcon> m_customIcons;
-    QHash<QUuid, QImage> m_customIconsRaw;
     QList<QUuid> m_customIconsOrder;
+    QHash<QUuid, CustomIconData> m_customIcons;
     QHash<QByteArray, QUuid> m_customIconsHashes;
 
     QPointer<Group> m_recycleBin;

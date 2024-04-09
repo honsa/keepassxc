@@ -37,7 +37,7 @@ class EntryAttachmentsWidget : public QWidget
     Q_PROPERTY(bool isButtonsVisible READ isButtonsVisible WRITE setButtonsVisible NOTIFY buttonsVisibleChanged)
 public:
     explicit EntryAttachmentsWidget(QWidget* parent = nullptr);
-    ~EntryAttachmentsWidget();
+    ~EntryAttachmentsWidget() override;
 
     const EntryAttachments* attachments() const;
     bool isReadOnly() const;
@@ -69,7 +69,7 @@ private slots:
 private:
     bool insertAttachments(const QStringList& fileNames, QString& errorMessage);
 
-    QStringList confirmLargeAttachments(const QStringList& filenames);
+    QStringList confirmAttachmentSelection(const QStringList& filenames);
 
     bool eventFilter(QObject* watched, QEvent* event) override;
 

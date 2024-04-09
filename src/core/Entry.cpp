@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2023 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2010 Felix Geyer <debfx@fobos.de>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -19,12 +19,12 @@
 #include "Entry.h"
 
 #include "core/Config.h"
-#include "core/DatabaseIcons.h"
+#include "core/Database.h"
 #include "core/Group.h"
 #include "core/Metadata.h"
 #include "core/PasswordHealth.h"
 #include "core/Tools.h"
-#include "totp/totp.h"
+#include "core/Totp.h"
 
 #include <QDir>
 #include <QRegularExpression>
@@ -46,6 +46,7 @@ Entry::Entry()
     m_data.iconNumber = DefaultIconNumber;
     m_data.autoTypeEnabled = true;
     m_data.autoTypeObfuscation = 0;
+    m_data.excludeFromReports = false;
 
     connect(m_attributes, &EntryAttributes::modified, this, &Entry::updateTotp);
     connect(m_attributes, &EntryAttributes::modified, this, &Entry::modified);
@@ -159,40 +160,6 @@ const QString Entry::uuidToHex() const
     return Tools::uuidToHex(m_uuid);
 }
 
-QImage Entry::icon() const
-{
-    if (m_data.customIcon.isNull()) {
-        return databaseIcons()->icon(m_data.iconNumber).toImage();
-    } else {
-        Q_ASSERT(database());
-
-        if (database()) {
-            return database()->metadata()->customIcon(m_data.customIcon);
-        } else {
-            return QImage();
-        }
-    }
-}
-
-QPixmap Entry::iconPixmap(IconSize size) const
-{
-    QPixmap icon(size, size);
-    if (m_data.customIcon.isNull()) {
-        icon = databaseIcons()->icon(m_data.iconNumber, size);
-    } else {
-        Q_ASSERT(database());
-        if (database()) {
-            icon = database()->metadata()->customIconPixmap(m_data.customIcon, size);
-        }
-    }
-
-    if (isExpired()) {
-        icon = databaseIcons()->applyBadge(icon, DatabaseIcons::Badges::Expired);
-    }
-
-    return icon;
-}
-
 int Entry::iconNumber() const
 {
     return m_data.iconNumber;
@@ -220,6 +187,11 @@ QString Entry::overrideUrl() const
 
 QString Entry::tags() const
 {
+    return m_data.tags.join(",");
+}
+
+QStringList Entry::tagList() const
+{
     return m_data.tags;
 }
 
@@ -233,6 +205,11 @@ bool Entry::autoTypeEnabled() const
     return m_data.autoTypeEnabled;
 }
 
+bool Entry::groupAutoTypeEnabled() const
+{
+    return group() && group()->resolveAutoTypeEnabled();
+}
+
 int Entry::autoTypeObfuscation() const
 {
     return m_data.autoTypeObfuscation;
@@ -243,7 +220,7 @@ QString Entry::defaultAutoTypeSequence() const
     return m_data.defaultAutoTypeSequence;
 }
 
-const QSharedPointer<PasswordHealth>& Entry::passwordHealth()
+const QSharedPointer<PasswordHealth> Entry::passwordHealth()
 {
     if (!m_data.passwordHealth) {
         m_data.passwordHealth.reset(new PasswordHealth(resolvePlaceholder(password())));
@@ -251,15 +228,24 @@ const QSharedPointer<PasswordHealth>& Entry::passwordHealth()
     return m_data.passwordHealth;
 }
 
+const QSharedPointer<PasswordHealth> Entry::passwordHealth() const
+{
+    if (!m_data.passwordHealth) {
+        return QSharedPointer<PasswordHealth>::create(resolvePlaceholder(password()));
+    }
+    return m_data.passwordHealth;
+}
+
 bool Entry::excludeFromReports() const
 {
-    return customData()->contains(CustomData::ExcludeFromReports)
-           && customData()->value(CustomData::ExcludeFromReports) == TRUE_STR;
+    return m_data.excludeFromReports
+           || (customData()->contains(CustomData::ExcludeFromReportsLegacy)
+               && customData()->value(CustomData::ExcludeFromReportsLegacy) == TRUE_STR);
 }
 
 void Entry::setExcludeFromReports(bool state)
 {
-    customData()->set(CustomData::ExcludeFromReports, state ? TRUE_STR : FALSE_STR);
+    set(m_data.excludeFromReports, state);
 }
 
 /**
@@ -299,7 +285,7 @@ QString Entry::effectiveAutoTypeSequence() const
 }
 
 /**
- * Retrive the autotype sequences matches for a given windowTitle
+ * Retrieve the Auto-Type sequences matches for a given windowTitle
  * This returns a list with priority ordering. If you don't want duplicates call .toSet() on it.
  */
 QList<QString> Entry::autoTypeSequences(const QString& windowTitle) const
@@ -313,13 +299,14 @@ QList<QString> Entry::autoTypeSequences(const QString& windowTitle) const
     auto windowMatches = [&](const QString& pattern) {
         // Regex searching
         if (pattern.startsWith("//") && pattern.endsWith("//") && pattern.size() >= 4) {
-            QRegExp regExp(pattern.mid(2, pattern.size() - 4), Qt::CaseInsensitive, QRegExp::RegExp2);
-            return (regExp.indexIn(windowTitle) != -1);
+            QRegularExpression regExp(pattern.mid(2, pattern.size() - 4), QRegularExpression::CaseInsensitiveOption);
+            return regExp.match(windowTitle).hasMatch();
         }
 
         // Wildcard searching
-        auto regex = Tools::convertToRegex(pattern, true, false, false);
-        return windowTitle.contains(regex);
+        const auto regExp = Tools::convertToRegex(
+            pattern, Tools::RegexConvertOpts::EXACT_MATCH | Tools::RegexConvertOpts::WILDCARD_UNLIMITED_MATCH);
+        return regExp.match(windowTitle).hasMatch();
     };
 
     auto windowMatchesTitle = [&](const QString& entryTitle) {
@@ -345,7 +332,7 @@ QList<QString> Entry::autoTypeSequences(const QString& windowTitle) const
     const auto assocList = autoTypeAssociations()->getAll();
     for (const auto& assoc : assocList) {
         auto window = resolveMultiplePlaceholders(assoc.window);
-        if (windowMatches(window)) {
+        if (!assoc.window.isEmpty() && windowMatches(window)) {
             if (!assoc.sequence.isEmpty()) {
                 sequenceList << assoc.sequence;
             } else {
@@ -385,6 +372,29 @@ QString Entry::title() const
 QString Entry::url() const
 {
     return m_attributes->value(EntryAttributes::URLKey);
+}
+
+QStringList Entry::getAllUrls() const
+{
+    QStringList urlList;
+    auto entryUrl = url();
+
+    if (!entryUrl.isEmpty()) {
+        urlList << (EntryAttributes::matchReference(entryUrl).hasMatch() ? resolveMultiplePlaceholders(entryUrl)
+                                                                         : entryUrl);
+    }
+
+    for (const auto& key : m_attributes->keys()) {
+        if (key.startsWith(EntryAttributes::AdditionalUrlAttribute)
+            || key == QString("%1_RELYING_PARTY").arg(EntryAttributes::PasskeyAttribute)) {
+            auto additionalUrl = m_attributes->value(key);
+            if (!additionalUrl.isEmpty()) {
+                urlList << resolveMultiplePlaceholders(additionalUrl);
+            }
+        }
+    }
+
+    return urlList;
 }
 
 QString Entry::webUrl() const
@@ -438,7 +448,12 @@ int Entry::size() const
 
 bool Entry::isExpired() const
 {
-    return m_data.timeInfo.expires() && m_data.timeInfo.expiryTime() < Clock::currentDateTimeUtc();
+    return willExpireInDays(0);
+}
+
+bool Entry::willExpireInDays(int days) const
+{
+    return m_data.timeInfo.expires() && m_data.timeInfo.expiryTime() < Clock::currentDateTime().addDays(days);
 }
 
 bool Entry::isRecycled() const
@@ -448,7 +463,7 @@ bool Entry::isRecycled() const
         return false;
     }
 
-    return m_group == db->metadata()->recycleBin() || m_group->isRecycled();
+    return m_group->isRecycled();
 }
 
 bool Entry::isAttributeReference(const QString& key) const
@@ -531,6 +546,11 @@ bool Entry::hasTotp() const
     return !m_data.totpSettings.isNull();
 }
 
+bool Entry::hasPasskey() const
+{
+    return m_attributes->hasPasskey();
+}
+
 QString Entry::totp() const
 {
     if (hasTotp()) {
@@ -546,7 +566,7 @@ void Entry::setTotp(QSharedPointer<Totp::Settings> settings)
     m_attributes->remove(Totp::ATTRIBUTE_SEED);
     m_attributes->remove(Totp::ATTRIBUTE_SETTINGS);
 
-    if (settings->key.isEmpty()) {
+    if (!settings || settings->key.isEmpty()) {
         m_data.totpSettings.reset();
     } else {
         m_data.totpSettings = std::move(settings);
@@ -644,7 +664,42 @@ void Entry::setOverrideUrl(const QString& url)
 
 void Entry::setTags(const QString& tags)
 {
-    set(m_data.tags, tags);
+    static QRegExp rx("(\\,|\\t|\\;)");
+    auto taglist = tags.split(rx, QString::SkipEmptyParts);
+    // Trim whitespace before/after tag text
+    for (auto itr = taglist.begin(); itr != taglist.end(); ++itr) {
+        *itr = itr->trimmed();
+    }
+    // Remove duplicates
+    auto tagSet = QSet<QString>::fromList(taglist);
+    taglist = tagSet.toList();
+    // Sort alphabetically
+    taglist.sort();
+    set(m_data.tags, taglist);
+}
+
+void Entry::addTag(const QString& tag)
+{
+    auto cleanTag = tag.trimmed();
+    cleanTag.remove(QRegExp("(\\,|\\t|\\;)"));
+
+    auto taglist = m_data.tags;
+    if (!taglist.contains(cleanTag)) {
+        taglist.append(cleanTag);
+        taglist.sort();
+        set(m_data.tags, taglist);
+    }
+}
+
+void Entry::removeTag(const QString& tag)
+{
+    auto cleanTag = tag.trimmed();
+    cleanTag.remove(QRegExp("(\\,|\\t|\\;)"));
+
+    auto taglist = m_data.tags;
+    if (taglist.removeAll(tag) > 0) {
+        set(m_data.tags, taglist);
+    }
 }
 
 void Entry::setTimeInfo(const TimeInfo& timeInfo)
@@ -791,7 +846,6 @@ void Entry::truncateHistory()
     int histMaxSize = db->metadata()->historyMaxSize();
     if (histMaxSize > -1) {
         int size = 0;
-        QSet<QByteArray> foundAttachments = attachments()->values();
 
         QMutableListIterator<Entry*> i(m_history);
         i.toBack();
@@ -801,7 +855,6 @@ void Entry::truncateHistory()
             // don't calculate size if it's already above the maximum
             if (size <= histMaxSize) {
                 size += historyItem->size();
-                foundAttachments += historyItem->attachments()->values();
             }
 
             if (size > histMaxSize) {
@@ -855,7 +908,7 @@ bool Entry::equals(const Entry* other, CompareItemOptions options) const
 
 Entry* Entry::clone(CloneFlags flags) const
 {
-    Entry* entry = new Entry();
+    auto entry = new Entry();
     entry->setUpdateTimeinfo(false);
     if (flags & CloneNewUuid) {
         entry->m_uuid = QUuid::createUuid();
@@ -955,19 +1008,19 @@ void Entry::updateModifiedSinceBegin()
 
 QString Entry::resolveMultiplePlaceholdersRecursive(const QString& str, int maxDepth) const
 {
+    static QRegularExpression placeholderRegEx("(\\{[^\\}]+?\\})", QRegularExpression::CaseInsensitiveOption);
+
     if (maxDepth <= 0) {
         qWarning("Maximum depth of replacement has been reached. Entry uuid: %s", uuid().toString().toLatin1().data());
         return str;
     }
 
     QString result = str;
-    QRegExp placeholderRegEx("(\\{[^\\}]+\\})", Qt::CaseInsensitive, QRegExp::RegExp2);
-    placeholderRegEx.setMinimal(true);
-    int pos = 0;
-    while ((pos = placeholderRegEx.indexIn(str, pos)) != -1) {
-        const QString found = placeholderRegEx.cap(1);
+    auto matches = placeholderRegEx.globalMatch(str);
+    while (matches.hasNext()) {
+        auto match = matches.next();
+        const auto found = match.captured(1);
         result.replace(found, resolvePlaceholderRecursive(found, maxDepth - 1));
-        pos += placeholderRegEx.matchedLength();
     }
 
     if (result != str) {
@@ -1129,7 +1182,7 @@ QString Entry::resolveReferencePlaceholderRecursive(const QString& placeholder, 
     // using format from http://keepass.info/help/base/fieldrefs.html at the time of writing
 
     QRegularExpressionMatch match = EntryAttributes::matchReference(placeholder);
-    if (!match.hasMatch()) {
+    if (!match.hasMatch() || !m_group || !m_group->database()) {
         return placeholder;
     }
 
@@ -1139,8 +1192,6 @@ QString Entry::resolveReferencePlaceholderRecursive(const QString& placeholder, 
 
     const EntryReferenceType searchInType = Entry::referenceType(searchIn);
 
-    Q_ASSERT(m_group);
-    Q_ASSERT(m_group->database());
     const Entry* refEntry = m_group->database()->rootGroup()->findEntryBySearchTerm(searchText, searchInType);
 
     if (refEntry) {
@@ -1174,7 +1225,7 @@ QString Entry::referenceFieldValue(EntryReferenceType referenceType) const
     default:
         break;
     }
-    return QString();
+    return {};
 }
 
 void Entry::moveUp()
@@ -1201,7 +1252,7 @@ const Group* Entry::group() const
     return m_group;
 }
 
-void Entry::setGroup(Group* group)
+void Entry::setGroup(Group* group, bool trackPrevious)
 {
     Q_ASSERT(group);
 
@@ -1212,20 +1263,24 @@ void Entry::setGroup(Group* group)
     if (m_group) {
         m_group->removeEntry(this);
         if (m_group->database() && m_group->database() != group->database()) {
+            setPreviousParentGroup(nullptr);
             m_group->database()->addDeletedObject(m_uuid);
 
             // copy custom icon to the new database
             if (!iconUuid().isNull() && group->database() && m_group->database()->metadata()->hasCustomIcon(iconUuid())
                 && !group->database()->metadata()->hasCustomIcon(iconUuid())) {
-                group->database()->metadata()->addCustomIcon(iconUuid(), icon());
+                group->database()->metadata()->addCustomIcon(iconUuid(),
+                                                             m_group->database()->metadata()->customIcon(iconUuid()));
             }
+        } else if (trackPrevious && m_group->database() && group != m_group) {
+            setPreviousParentGroup(m_group);
         }
     }
 
+    QObject::setParent(group);
+
     m_group = group;
     group->addEntry(this);
-
-    QObject::setParent(group);
 
     if (m_updateTimeinfo) {
         m_data.timeInfo.setLocationChanged(Clock::currentDateTimeUtc());
@@ -1287,7 +1342,7 @@ QString Entry::resolvePlaceholder(const QString& placeholder) const
 QString Entry::resolveUrlPlaceholder(const QString& str, Entry::PlaceholderType placeholderType) const
 {
     if (str.isEmpty()) {
-        return QString();
+        return {};
     }
 
     const QUrl qurl(str);
@@ -1318,7 +1373,7 @@ QString Entry::resolveUrlPlaceholder(const QString& str, Entry::PlaceholderType 
     }
     }
 
-    return QString();
+    return {};
 }
 
 Entry::PlaceholderType Entry::placeholderType(const QString& placeholder) const
@@ -1390,7 +1445,7 @@ QString Entry::resolveUrl(const QString& url) const
         }
 
         // No URL in this command
-        return QString("");
+        return {};
     }
 
     if (!newUrl.isEmpty() && !newUrl.contains("://")) {
@@ -1406,7 +1461,38 @@ QString Entry::resolveUrl(const QString& url) const
     }
 
     // No valid http URL's found
-    return QString("");
+    return {};
+}
+
+Group* Entry::previousParentGroup()
+{
+    if (!database() || !database()->rootGroup()) {
+        return nullptr;
+    }
+    return database()->rootGroup()->findGroupByUuid(m_data.previousParentGroupUuid);
+}
+
+const Group* Entry::previousParentGroup() const
+{
+    if (!database() || !database()->rootGroup()) {
+        return nullptr;
+    }
+    return database()->rootGroup()->findGroupByUuid(m_data.previousParentGroupUuid);
+}
+
+QUuid Entry::previousParentGroupUuid() const
+{
+    return m_data.previousParentGroupUuid;
+}
+
+void Entry::setPreviousParentGroupUuid(const QUuid& uuid)
+{
+    set(m_data.previousParentGroupUuid, uuid);
+}
+
+void Entry::setPreviousParentGroup(const Group* group)
+{
+    setPreviousParentGroupUuid(group ? group->uuid() : QUuid());
 }
 
 bool EntryData::operator==(const EntryData& other) const
@@ -1463,7 +1549,13 @@ bool EntryData::equals(const EntryData& other, CompareItemOptions options) const
             return false;
         }
     } else if (totpSettings.isNull() != other.totpSettings.isNull()) {
-        // The existance of TOTP has changed between these entries
+        // The existence of TOTP has changed between these entries
+        return false;
+    }
+    if (::compare(excludeFromReports, other.excludeFromReports, options) != 0) {
+        return false;
+    }
+    if (::compare(previousParentGroupUuid, other.previousParentGroupUuid, options) != 0) {
         return false;
     }
 

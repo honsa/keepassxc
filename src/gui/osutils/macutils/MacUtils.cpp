@@ -26,7 +26,10 @@
 #include <QWindow>
 
 #include <ApplicationServices/ApplicationServices.h>
+
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1080
 #include <CoreGraphics/CGEventSource.h>
+#endif
 
 #define INVALID_KEYCODE 0xFFFF
 
@@ -138,7 +141,11 @@ void MacUtils::setLaunchAtStartup(bool enable)
 
 bool MacUtils::isCapslockEnabled()
 {
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1080
     return (CGEventSourceFlagsState(kCGEventSourceStateHIDSystemState) & kCGEventFlagMaskAlphaShift) != 0;
+#else
+    return false;
+#endif
 }
 
 /**
@@ -159,11 +166,9 @@ bool MacUtils::canPreventScreenCapture() const
 
 bool MacUtils::setPreventScreenCapture(QWindow* window, bool prevent) const
 {
-    if (!window) {
-        return false;
+    if (window) {
+        m_appkit->setWindowSecurity(window, prevent);
     }
-
-    m_appkit->setWindowSecurity(window, prevent);
     return true;
 }
 
@@ -178,13 +183,22 @@ void MacUtils::registerNativeEventFilter()
 bool MacUtils::registerGlobalShortcut(const QString& name, Qt::Key key, Qt::KeyboardModifiers modifiers, QString* error)
 {
     auto keycode = qtToNativeKeyCode(key);
-    auto modifierscode = qtToNativeModifiers(modifiers, false);
     if (keycode == INVALID_KEYCODE) {
         if (error) {
             *error = tr("Invalid key code");
         }
         return false;
     }
+
+    // Qt inverts CMD and CTRL on macOS under the hood, undo this
+    if (modifiers & Qt::MetaModifier && !(modifiers & Qt::ControlModifier)) {
+        modifiers &= ~Qt::MetaModifier;
+        modifiers |= Qt::ControlModifier;
+    } else if (modifiers & Qt::ControlModifier && !(modifiers & Qt::MetaModifier)) {
+        modifiers &= ~Qt::ControlModifier;
+        modifiers |= Qt::MetaModifier;
+    }
+    auto modifierscode = qtToNativeModifiers(modifiers, false);
 
     // Check if this key combo is registered to another shortcut
     QHashIterator<QString, QSharedPointer<globalShortcut>> i(m_globalShortcuts);
@@ -359,6 +373,10 @@ uint16 MacUtils::qtToNativeKeyCode(Qt::Key key)
     case Qt::Key_Shift:
         return kVK_Shift;
     case Qt::Key_Control:
+        return kVK_Control;
+    case Qt::Key_Alt:
+        return kVK_Option;
+    case Qt::Key_Meta:
         return kVK_Command;
     case Qt::Key_Backspace:
         return kVK_Delete;
@@ -429,7 +447,6 @@ uint16 MacUtils::qtToNativeKeyCode(Qt::Key key)
         return kVK_F16;
 
     default:
-        Q_ASSERT(false);
         return INVALID_KEYCODE;
     }
 }
@@ -458,13 +475,13 @@ CGEventFlags MacUtils::qtToNativeModifiers(Qt::KeyboardModifiers modifiers, bool
         nativeModifiers = CGEventFlags(nativeModifiers | shiftMod);
     }
     if (modifiers & Qt::ControlModifier) {
-        nativeModifiers = CGEventFlags(nativeModifiers | cmdMod);
+        nativeModifiers = CGEventFlags(nativeModifiers | controlMod);
     }
     if (modifiers & Qt::AltModifier) {
         nativeModifiers = CGEventFlags(nativeModifiers | optionMod);
     }
     if (modifiers & Qt::MetaModifier) {
-        nativeModifiers = CGEventFlags(nativeModifiers | controlMod);
+        nativeModifiers = CGEventFlags(nativeModifiers | cmdMod);
     }
 
     return nativeModifiers;

@@ -52,36 +52,38 @@ void Clipboard::setText(const QString& text, bool clear)
     }
 
     auto* mime = new QMimeData;
-#ifdef Q_OS_MACOS
     mime->setText(text);
+#if defined(Q_OS_MACOS)
     mime->setData("application/x-nspasteboard-concealed-type", text.toUtf8());
-    clipboard->setMimeData(mime, QClipboard::Clipboard);
-#else
-    mime->setText(text);
-#ifdef Q_OS_LINUX
+#elif defined(Q_OS_UNIX)
     mime->setData("x-kde-passwordManagerHint", QByteArrayLiteral("secret"));
-#endif
-#ifdef Q_OS_WIN
+#elif defined(Q_OS_WIN)
     mime->setData("ExcludeClipboardContentFromMonitorProcessing", QByteArrayLiteral("1"));
 #endif
-    clipboard->setMimeData(mime, QClipboard::Clipboard);
 
     if (clipboard->supportsSelection()) {
         clipboard->setMimeData(mime, QClipboard::Selection);
     }
-#endif
+    clipboard->setMimeData(mime, QClipboard::Clipboard);
 
     if (clear) {
         m_lastCopied = text;
         if (config()->get(Config::Security_ClearClipboard).toBool()) {
             int timeout = config()->get(Config::Security_ClearClipboardTimeout).toInt();
             if (timeout > 0) {
-                m_secondsElapsed = -1;
-                countdownTick();
+                m_secondsToClear = timeout;
+                sendCountdownStatus();
                 m_timer->start(1000);
+            } else {
+                clearCopiedText();
             }
         }
     }
+}
+
+int Clipboard::secondsToClear()
+{
+    return m_secondsToClear;
 }
 
 void Clipboard::clearCopiedText()
@@ -97,7 +99,8 @@ void Clipboard::clearCopiedText()
 
     if (m_lastCopied == clipboard->text(QClipboard::Clipboard)
         || m_lastCopied == clipboard->text(QClipboard::Selection)) {
-        setText("", false);
+        clipboard->clear(QClipboard::Clipboard);
+        clipboard->clear(QClipboard::Selection);
     }
 
     m_lastCopied.clear();
@@ -105,15 +108,18 @@ void Clipboard::clearCopiedText()
 
 void Clipboard::countdownTick()
 {
-    m_secondsElapsed++;
-    int timeout = config()->get(Config::Security_ClearClipboardTimeout).toInt();
-    int timeLeft = timeout - m_secondsElapsed;
-    if (timeLeft <= 0) {
+    if (--m_secondsToClear <= 0) {
         clearCopiedText();
     } else {
-        emit updateCountdown(100 * timeLeft / timeout,
-                             QObject::tr("Clearing the clipboard in %1 second(s)…", "", timeLeft).arg(timeLeft));
+        sendCountdownStatus();
     }
+}
+
+void Clipboard::sendCountdownStatus()
+{
+    emit updateCountdown(
+        100 * m_secondsToClear / config()->get(Config::Security_ClearClipboardTimeout).toInt(),
+        QObject::tr("Clearing the clipboard in %1 second(s)…", "", m_secondsToClear).arg(m_secondsToClear));
 }
 
 Clipboard* Clipboard::instance()

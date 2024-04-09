@@ -25,25 +25,22 @@
 #include <QRegularExpression>
 #include <QTranslator>
 
-#include "config-keepassx.h"
-#include "core/Config.h"
 #include "core/Resources.h"
 
 /**
  * Install all KeePassXC and Qt translators.
  */
-void Translator::installTranslators()
+void Translator::installTranslators(const QString& uiLanguage)
 {
     QStringList languages;
-    QString languageSetting = config()->get(Config::GUI_Language).toString();
-    if (languageSetting.isEmpty() || languageSetting == "system") {
+    if (uiLanguage.isEmpty() || uiLanguage == "system") {
         // NOTE: this is a workaround for the terrible way Qt loads languages
         // using the QLocale::uiLanguages() approach. Instead, we search each
         // language and all country variants in order before moving to the next.
         QLocale locale;
         languages = locale.uiLanguages();
     } else {
-        languages << languageSetting;
+        languages << uiLanguage;
     }
 
     // Always try to load english last
@@ -69,9 +66,9 @@ bool Translator::installTranslator(const QStringList& languages, const QString& 
     for (const auto& language : languages) {
         QLocale locale(language);
         QScopedPointer<QTranslator> translator(new QTranslator(qApp));
-        if (translator->load(locale, "keepassx_", "", path)) {
+        if (translator->load(locale, "keepassxc_", "", path)) {
             return QCoreApplication::installTranslator(translator.take());
-        } else if (translator->load(locale, "keepassx_", "", QLibraryInfo::location(QLibraryInfo::TranslationsPath))) {
+        } else if (translator->load(locale, "keepassxc_", "", QLibraryInfo::location(QLibraryInfo::TranslationsPath))) {
             return QCoreApplication::installTranslator(translator.take());
         }
     }
@@ -109,7 +106,7 @@ QList<QPair<QString, QString>> Translator::availableLanguages()
     QList<QPair<QString, QString>> languages;
     languages.append(QPair<QString, QString>("system", "System default"));
 
-    QRegularExpression regExp("^keepassx_([a-zA-Z_]+)\\.qm$", QRegularExpression::CaseInsensitiveOption);
+    QRegularExpression regExp("^keepassxc_([a-zA-Z_]+)\\.qm$", QRegularExpression::CaseInsensitiveOption);
     const QStringList fileList = QDir(resources()->dataPath("translations")).entryList();
     for (const QString& filename : fileList) {
         QRegularExpressionMatch match = regExp.match(filename);

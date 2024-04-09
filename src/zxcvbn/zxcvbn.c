@@ -44,12 +44,6 @@
 #endif
 #endif
 
-/* For pre-compiled headers under windows */
-#ifndef __MINGW32__
-#ifdef _WIN32
-#include "stdafx.h"
-#endif
-#endif
 
 /* Minimum number of characters in a incrementing/decrementing sequence match */
 #define MIN_SEQUENCE_LEN 3
@@ -66,7 +60,7 @@
 
 /* Additional entropy to add when password is made of multiple matches. Use different
  * amounts depending on whether the match is at the end of the password, or in the
- * middle. If the match is at the begining then there is no additional entropy.
+ * middle. If the match is at the beginning then there is no additional entropy.
  */
 #define MULTI_END_ADDITION 1.0
 #define MULTI_MID_ADDITION 1.75
@@ -175,7 +169,7 @@ static ZxcMatch_t *AllocMatch()
 static void AddResult(ZxcMatch_t **HeadRef, ZxcMatch_t *Nu, int MaxLen)
 {
     /* Adjust the entropy to be used for calculations depending on whether the passed match is
-     * at the begining, middle or end of the password
+     * at the beginning, middle or end of the password
      */
     if (Nu->Begin)
     {
@@ -552,7 +546,7 @@ static void AddLeetChr(uint8_t c, int IsLeet, uint8_t *Leeted, uint8_t *UnLeet)
 
 /**********************************************************************************
  * Given details of a word match, update it with the entropy (as natural log of
- * number of possiblities)
+ * number of possibilities)
  */
 static void DictionaryEntropy(ZxcMatch_t *m, DictMatchInfo_t *Extra, const uint8_t *Pwd)
 {
@@ -1376,7 +1370,7 @@ static void RepeatMatch(ZxcMatch_t **Result, const uint8_t *Passwd, int Start, i
     int Len, i;
     uint8_t c;
     Passwd += Start;
-    /* Remember first char and the count its occurances */
+    /* Remember first char and the count its occurrences */
     c = *Passwd;
     for(Len = 1; (Len < MaxLen) && (c == Passwd[Len]); ++Len)
     { }
@@ -1539,9 +1533,9 @@ static void SequenceMatch(ZxcMatch_t **Result, const uint8_t *Passwd, int Start,
 
 /**********************************************************************************
  * Matching a password is treated as a problem of finding the minimum distance
- * between two vertexes in a graph. This is solved using Dijkstra's algorithm.
+ * between two vertices in a graph. This is solved using Dijkstra's algorithm.
  *
- * There  are a series of nodes (or vertexes in graph terminology) which correspond
+ * There  are a series of nodes (or vertices in graph terminology) which correspond
  * to points between each character of the password. Also there is a start node
  * before the first character and an end node after the last character.
  *
@@ -1552,7 +1546,7 @@ static void SequenceMatch(ZxcMatch_t **Result, const uint8_t *Passwd, int Start,
  * end node.
  *
  * Dijkstra's algorithm finds the combination of these part matches (or paths)
- * which gives the lowest entropy (or smallest distance) from begining to end
+ * which gives the lowest entropy (or smallest distance) from beginning to end
  * of the password. 
  */
 

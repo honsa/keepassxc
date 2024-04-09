@@ -18,33 +18,52 @@
 
 #include "Icons.h"
 
+#include <QBuffer>
 #include <QIconEngine>
+#include <QImageReader>
+#include <QPaintDevice>
 #include <QPainter>
 
+#include "config-keepassx.h"
+#include "core/Config.h"
+#include "core/Database.h"
+#include "gui/DatabaseIcons.h"
 #include "gui/MainWindow.h"
 #include "gui/osutils/OSUtils.h"
+
+#ifdef WITH_XC_KEESHARE
+#include "keeshare/KeeShare.h"
+#endif
 
 class AdaptiveIconEngine : public QIconEngine
 {
 public:
-    explicit AdaptiveIconEngine(QIcon baseIcon);
+    explicit AdaptiveIconEngine(QIcon baseIcon, QColor overrideColor = {});
     void paint(QPainter* painter, const QRect& rect, QIcon::Mode mode, QIcon::State state) override;
     QPixmap pixmap(const QSize& size, QIcon::Mode mode, QIcon::State state) override;
     QIconEngine* clone() const override;
 
 private:
     QIcon m_baseIcon;
+    QColor m_overrideColor;
 };
 
 Icons* Icons::m_instance(nullptr);
 
-Icons::Icons()
+Icons::Icons() = default;
+
+QString Icons::applicationIconName()
 {
+#ifdef KEEPASSXC_DIST_FLATPAK
+    return "org.keepassxc.KeePassXC";
+#else
+    return "keepassxc";
+#endif
 }
 
 QIcon Icons::applicationIcon()
 {
-    return icon("keepassxc", false);
+    return icon(applicationIconName(), false);
 }
 
 QString Icons::trayIconAppearance() const
@@ -60,29 +79,27 @@ QString Icons::trayIconAppearance() const
     return iconAppearance;
 }
 
-QIcon Icons::trayIcon(QString style)
+QIcon Icons::trayIcon(bool unlocked)
 {
-    if (style == "unlocked") {
-        style.clear();
-    }
-    if (!style.isEmpty()) {
-        style = "-" + style;
+    QString suffix;
+    if (!unlocked) {
+        suffix = "-locked";
     }
 
     auto iconApperance = trayIconAppearance();
     if (!iconApperance.startsWith("monochrome")) {
-        return icon(QString("keepassxc%1").arg(style), false);
+        return icon(QString("%1%2").arg(applicationIconName(), suffix), false);
     }
 
     QIcon i;
 #if defined(Q_OS_MACOS) || defined(Q_OS_WIN)
     if (osUtils->isStatusBarDark()) {
-        i = icon(QString("keepassxc-monochrome-light%1").arg(style), false);
+        i = icon(QString("keepassxc-monochrome-light%1").arg(suffix), false);
     } else {
-        i = icon(QString("keepassxc-monochrome-dark%1").arg(style), false);
+        i = icon(QString("keepassxc-monochrome-dark%1").arg(suffix), false);
     }
 #else
-    i = icon(QString("keepassxc-%1%2").arg(iconApperance, style), false);
+    i = icon(QString("%1-%2%3").arg(applicationIconName(), iconApperance, suffix), false);
 #endif
 #if QT_VERSION >= QT_VERSION_CHECK(5, 6, 0)
     // Set as mask to allow the operating system to recolour the tray icon. This may look weird
@@ -94,19 +111,10 @@ QIcon Icons::trayIcon(QString style)
     return i;
 }
 
-QIcon Icons::trayIconLocked()
-{
-    return trayIcon("locked");
-}
-
-QIcon Icons::trayIconUnlocked()
-{
-    return trayIcon("unlocked");
-}
-
-AdaptiveIconEngine::AdaptiveIconEngine(QIcon baseIcon)
+AdaptiveIconEngine::AdaptiveIconEngine(QIcon baseIcon, QColor overrideColor)
     : QIconEngine()
     , m_baseIcon(std::move(baseIcon))
+    , m_overrideColor(overrideColor)
 {
 }
 
@@ -124,7 +132,10 @@ void AdaptiveIconEngine::paint(QPainter* painter, const QRect& rect, QIcon::Mode
 
     m_baseIcon.paint(&p, img.rect(), Qt::AlignCenter, mode, state);
 
-    if (getMainWindow()) {
+    if (m_overrideColor.isValid()) {
+        p.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        p.fillRect(img.rect(), m_overrideColor);
+    } else if (getMainWindow()) {
         QPalette palette = getMainWindow()->palette();
         p.setCompositionMode(QPainter::CompositionMode_SourceIn);
 
@@ -179,7 +190,7 @@ QIcon Icons::icon(const QString& name, bool recolor, const QColor& overrideColor
 
     icon = QIcon::fromTheme(name);
     if (recolor) {
-        icon = QIcon(new AdaptiveIconEngine(icon));
+        icon = QIcon(new AdaptiveIconEngine(icon, overrideColor));
 #if QT_VERSION >= QT_VERSION_CHECK(5, 6, 0)
         icon.setIsMask(true);
 #endif
@@ -205,4 +216,99 @@ Icons* Icons::instance()
     }
 
     return m_instance;
+}
+
+QPixmap Icons::customIconPixmap(const Database* db, const QUuid& uuid, IconSize size)
+{
+    if (!db->metadata()->hasCustomIcon(uuid)) {
+        return {};
+    }
+    // Generate QIcon with pre-baked resolutions
+    auto icon = QImage::fromData(db->metadata()->customIcon(uuid).data);
+    auto basePixmap = QPixmap::fromImage(icon.scaled(64, 64, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+    return QIcon(basePixmap).pixmap(databaseIcons()->iconSize(size));
+}
+
+QHash<QUuid, QPixmap> Icons::customIconsPixmaps(const Database* db, IconSize size)
+{
+    QHash<QUuid, QPixmap> result;
+
+    for (const QUuid& uuid : db->metadata()->customIconsOrder()) {
+        result.insert(uuid, Icons::customIconPixmap(db, uuid, size));
+    }
+
+    return result;
+}
+
+QPixmap Icons::entryIconPixmap(const Entry* entry, IconSize size)
+{
+    QPixmap icon(size, size);
+    if (entry->iconUuid().isNull()) {
+        icon = databaseIcons()->icon(entry->iconNumber(), size);
+    } else {
+        if (entry->database()) {
+            icon = Icons::customIconPixmap(entry->database(), entry->iconUuid(), size);
+        }
+    }
+
+    if (entry->isExpired()) {
+        icon = databaseIcons()->applyBadge(icon, DatabaseIcons::Badges::Expired);
+    }
+
+    return icon;
+}
+
+QPixmap Icons::groupIconPixmap(const Group* group, IconSize size)
+{
+    QPixmap icon(size, size);
+    if (group->iconUuid().isNull()) {
+        icon = databaseIcons()->icon(group->iconNumber(), size);
+    } else {
+        if (group->database()) {
+            icon = Icons::customIconPixmap(group->database(), group->iconUuid(), size);
+        }
+    }
+
+    if (group->isExpired()) {
+        icon = databaseIcons()->applyBadge(icon, DatabaseIcons::Badges::Expired);
+    }
+#ifdef WITH_XC_KEESHARE
+    else if (KeeShare::isShared(group)) {
+        icon = KeeShare::indicatorBadge(group, icon);
+    }
+#endif
+
+    return icon;
+}
+
+QString Icons::imageFormatsFilter()
+{
+    const QList<QByteArray> formats = QImageReader::supportedImageFormats();
+    QStringList formatsStringList;
+
+    for (const QByteArray& format : formats) {
+        bool codePointClean = true;
+        for (char codePoint : format) {
+            if (!QChar(codePoint).isLetterOrNumber()) {
+                codePointClean = false;
+                break;
+            }
+        }
+        if (codePointClean) {
+            formatsStringList.append("*." + QString::fromLatin1(format).toLower());
+        }
+    }
+
+    return formatsStringList.join(" ");
+}
+
+QByteArray Icons::saveToBytes(const QImage& image)
+{
+    QByteArray ba;
+    QBuffer buffer(&ba);
+    buffer.open(QIODevice::WriteOnly);
+    // TODO: check !icon.save()
+    image.save(&buffer, "PNG");
+    buffer.close();
+    return ba;
 }

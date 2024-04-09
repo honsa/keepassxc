@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2020 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2024 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2011 Felix Geyer <debfx@fobos.de>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -61,7 +61,9 @@ static const QHash<Config::ConfigKey, ConfigDirective> configStrings = {
     {Config::AutoSaveOnExit,{QS("AutoSaveOnExit"), Roaming, true}},
     {Config::AutoSaveNonDataChanges,{QS("AutoSaveNonDataChanges"), Roaming, true}},
     {Config::BackupBeforeSave,{QS("BackupBeforeSave"), Roaming, false}},
+    {Config::BackupFilePathPattern,{QS("BackupFilePathPattern"), Roaming, QString("{DB_FILENAME}.old.kdbx")}},
     {Config::UseAtomicSaves,{QS("UseAtomicSaves"), Roaming, true}},
+    {Config::UseDirectWriteSaves,{QS("UseDirectWriteSaves"), Local, false}},
     {Config::SearchLimitGroup,{QS("SearchLimitGroup"), Roaming, false}},
     {Config::MinimizeOnOpenUrl,{QS("MinimizeOnOpenUrl"), Roaming, false}},
     {Config::HideWindowOnCopy,{QS("HideWindowOnCopy"), Roaming, false}},
@@ -76,9 +78,10 @@ static const QHash<Config::ConfigKey, ConfigDirective> configStrings = {
     {Config::AutoTypeHideExpiredEntry,{QS("AutoTypeHideExpiredEntry"), Roaming, false}},
     {Config::GlobalAutoTypeKey,{QS("GlobalAutoTypeKey"), Roaming, 0}},
     {Config::GlobalAutoTypeModifiers,{QS("GlobalAutoTypeModifiers"), Roaming, 0}},
+    {Config::GlobalAutoTypeRetypeTime,{QS("GlobalAutoTypeRetypeTime"), Roaming, 15}},
     {Config::FaviconDownloadTimeout,{QS("FaviconDownloadTimeout"), Roaming, 10}},
     {Config::UpdateCheckMessageShown,{QS("UpdateCheckMessageShown"), Roaming, false}},
-    {Config::UseTouchID,{QS("UseTouchID"), Roaming, false}},
+    {Config::DefaultDatabaseFileName,{QS("DefaultDatabaseFileName"), Roaming, {}}},
 
     {Config::LastDatabases, {QS("LastDatabases"), Local, {}}},
     {Config::LastKeyFiles, {QS("LastKeyFiles"), Local, {}}},
@@ -91,7 +94,6 @@ static const QHash<Config::ConfigKey, ConfigDirective> configStrings = {
     {Config::GUI_Language, {QS("GUI/Language"), Roaming, QS("system")}},
     {Config::GUI_HideToolbar, {QS("GUI/HideToolbar"), Roaming, false}},
     {Config::GUI_MovableToolbar, {QS("GUI/MovableToolbar"), Roaming, false}},
-    {Config::GUI_HideGroupsPanel, {QS("GUI/HideGroupsPanel"), Roaming, false}},
     {Config::GUI_HidePreviewPanel, {QS("GUI/HidePreviewPanel"), Roaming, false}},
     {Config::GUI_AlwaysOnTop, {QS("GUI/GUI_AlwaysOnTop"), Local, false}},
     {Config::GUI_ToolButtonStyle, {QS("GUI/ToolButtonStyle"), Roaming, Qt::ToolButtonIconOnly}},
@@ -102,26 +104,29 @@ static const QHash<Config::ConfigKey, ConfigDirective> configStrings = {
     {Config::GUI_MinimizeOnClose, {QS("GUI/MinimizeOnClose"), Roaming, false}},
     {Config::GUI_HideUsernames, {QS("GUI/HideUsernames"), Roaming, false}},
     {Config::GUI_HidePasswords, {QS("GUI/HidePasswords"), Roaming, true}},
-    {Config::GUI_AdvancedSettings, {QS("GUI/AdvancedSettings"), Roaming, false}},
+    {Config::GUI_ColorPasswords, {QS("GUI/ColorPasswords"), Roaming, false}},
     {Config::GUI_MonospaceNotes, {QS("GUI/MonospaceNotes"), Roaming, false}},
     {Config::GUI_ApplicationTheme, {QS("GUI/ApplicationTheme"), Roaming, QS("auto")}},
     {Config::GUI_CompactMode, {QS("GUI/CompactMode"), Roaming, false}},
     {Config::GUI_CheckForUpdates, {QS("GUI/CheckForUpdates"), Roaming, true}},
     {Config::GUI_CheckForUpdatesNextCheck, {QS("GUI/CheckForUpdatesNextCheck"), Local, 0}},
     {Config::GUI_CheckForUpdatesIncludeBetas, {QS("GUI/CheckForUpdatesIncludeBetas"), Roaming, false}},
+    {Config::GUI_ShowExpiredEntriesOnDatabaseUnlock, {QS("GUI/ShowExpiredEntriesOnDatabaseUnlock"), Roaming, true}},
+    {Config::GUI_ShowExpiredEntriesOnDatabaseUnlockOffsetDays, {QS("GUI/ShowExpiredEntriesOnDatabaseUnlockOffsetDays"), Roaming, 3}},
 
     {Config::GUI_MainWindowGeometry, {QS("GUI/MainWindowGeometry"), Local, {}}},
     {Config::GUI_MainWindowState, {QS("GUI/MainWindowState"), Local, {}}},
     {Config::GUI_ListViewState, {QS("GUI/ListViewState"), Local, {}}},
     {Config::GUI_SearchViewState, {QS("GUI/SearchViewState"), Local, {}}},
     {Config::GUI_SplitterState, {QS("GUI/SplitterState"), Local, {}}},
+    {Config::GUI_GroupSplitterState, {QS("GUI/GroupSplitterState"), Local, {}}},
     {Config::GUI_PreviewSplitterState, {QS("GUI/PreviewSplitterState"), Local, {}}},
     {Config::GUI_AutoTypeSelectDialogSize, {QS("GUI/AutoTypeSelectDialogSize"), Local, QSize(600, 250)}},
 
     // Security
     {Config::Security_ClearClipboard, {QS("Security/ClearClipboard"), Roaming, true}},
     {Config::Security_ClearClipboardTimeout, {QS("Security/ClearClipboardTimeout"), Roaming, 10}},
-    {Config::Security_ClearSearch, {QS("Security/ClearSearch"), Roaming, true}},
+    {Config::Security_ClearSearch, {QS("Security/ClearSearch"), Roaming, false}},
     {Config::Security_ClearSearchTimeout, {QS("Security/ClearSearchTimeout"), Roaming, 5}},
     {Config::Security_HideNotes, {QS("Security/Security_HideNotes"), Roaming, false}},
     {Config::Security_LockDatabaseIdle, {QS("Security/LockDatabaseIdle"), Roaming, false}},
@@ -133,13 +138,13 @@ static const QHash<Config::ConfigKey, ConfigDirective> configStrings = {
     {Config::Security_PasswordsHidden, {QS("Security/PasswordsHidden"), Roaming, true}},
     {Config::Security_PasswordEmptyPlaceholder, {QS("Security/PasswordEmptyPlaceholder"), Roaming, false}},
     {Config::Security_HidePasswordPreviewPanel, {QS("Security/HidePasswordPreviewPanel"), Roaming, true}},
+    {Config::Security_HideTotpPreviewPanel, {QS("Security/HideTotpPreviewPanel"), Roaming, false}},
     {Config::Security_AutoTypeAsk, {QS("Security/AutotypeAsk"), Roaming, true}},
     {Config::Security_IconDownloadFallback, {QS("Security/IconDownloadFallback"), Roaming, false}},
-    {Config::Security_ResetTouchId, {QS("Security/ResetTouchId"), Roaming, false}},
-    {Config::Security_ResetTouchIdTimeout, {QS("Security/ResetTouchIdTimeout"), Roaming, 30}},
-    {Config::Security_ResetTouchIdScreenlock,{QS("Security/ResetTouchIdScreenlock"), Roaming, true}},
     {Config::Security_NoConfirmMoveEntryToRecycleBin,{QS("Security/NoConfirmMoveEntryToRecycleBin"), Roaming, true}},
     {Config::Security_EnableCopyOnDoubleClick,{QS("Security/EnableCopyOnDoubleClick"), Roaming, false}},
+    {Config::Security_QuickUnlock, {QS("Security/QuickUnlock"), Local, true}},
+    {Config::Security_DatabasePasswordMinimumQuality, {QS("Security/DatabasePasswordMinimumQuality"), Local, 0}},
 
     // Browser
     {Config::Browser_Enabled, {QS("Browser/Enabled"), Roaming, false}},
@@ -151,6 +156,7 @@ static const QHash<Config::ConfigKey, ConfigDirective> configStrings = {
     {Config::Browser_UseCustomProxy, {QS("Browser/UseCustomProxy"), Roaming, false}},
     {Config::Browser_CustomProxyLocation, {QS("Browser/CustomProxyLocation"), Roaming, {}}},
     {Config::Browser_UpdateBinaryPath, {QS("Browser/UpdateBinaryPath"), Roaming, true}},
+    {Config::Browser_AllowGetDatabaseEntriesRequest, {QS("Browser/AllowGetDatabaseEntriesRequest"), Roaming, false}},
     {Config::Browser_AllowExpiredCredentials, {QS("Browser/AllowExpiredCredentials"), Roaming, false}},
     {Config::Browser_AlwaysAllowAccess, {QS("Browser/AlwaysAllowAccess"), Roaming, false}},
     {Config::Browser_AlwaysAllowUpdate, {QS("Browser/AlwaysAllowUpdate"), Roaming, false}},
@@ -161,6 +167,7 @@ static const QHash<Config::ConfigKey, ConfigDirective> configStrings = {
     {Config::Browser_UseCustomBrowser, {QS("Browser/UseCustomBrowser"), Local, false}},
     {Config::Browser_CustomBrowserType, {QS("Browser/CustomBrowserType"), Local, -1}},
     {Config::Browser_CustomBrowserLocation, {QS("Browser/CustomBrowserLocation"), Local, {}}},
+    {Config::Browser_AllowLocalhostWithPasskeys, {QS("Browser/Browser_AllowLocalhostWithPasskeys"), Roaming, false}},
 #ifdef QT_DEBUG
     {Config::Browser_CustomExtensionId, {QS("Browser/CustomExtensionId"), Local, {}}},
 #endif
@@ -168,14 +175,16 @@ static const QHash<Config::ConfigKey, ConfigDirective> configStrings = {
     // SSHAgent
     {Config::SSHAgent_Enabled, {QS("SSHAgent/Enabled"), Roaming, false}},
     {Config::SSHAgent_UseOpenSSH, {QS("SSHAgent/UseOpenSSH"), Roaming, false}},
-    {Config::SSHAgent_UsePageant, {QS("SSHAgent/UsePageant"), Roaming, false} },
+    {Config::SSHAgent_UsePageant, {QS("SSHAgent/UsePageant"), Roaming, true} },
     {Config::SSHAgent_AuthSockOverride, {QS("SSHAgent/AuthSockOverride"), Local, {}}},
+    {Config::SSHAgent_SecurityKeyProviderOverride, {QS("SSHAgent/SecurityKeyProviderOverride"), Local, {}}},
 
     // FdoSecrets
     {Config::FdoSecrets_Enabled, {QS("FdoSecrets/Enabled"), Roaming, false}},
     {Config::FdoSecrets_ShowNotification, {QS("FdoSecrets/ShowNotification"), Roaming, true}},
     {Config::FdoSecrets_ConfirmDeleteItem, {QS("FdoSecrets/ConfirmDeleteItem"), Roaming, true}},
     {Config::FdoSecrets_ConfirmAccessItem, {QS("FdoSecrets/ConfirmAccessItem"), Roaming, true}},
+    {Config::FdoSecrets_UnlockBeforeSearch, {QS("FdoSecrets/UnlockBeforeSearch"), Roaming, true}},
 
     // KeeShare
     {Config::KeeShare_QuietSuccess, {QS("KeeShare/QuietSuccess"), Roaming, false}},
@@ -224,6 +233,11 @@ QVariant Config::get(ConfigKey key)
         return m_localSettings->value(cfg.name, defaultValue);
     }
     return m_settings->value(cfg.name, defaultValue);
+}
+
+QVariant Config::getDefault(Config::ConfigKey key)
+{
+    return configStrings[key].defaultValue;
 }
 
 bool Config::hasAccessError()
@@ -317,9 +331,6 @@ static const QHash<QString, Config::ConfigKey> deprecationMap = {
     {QS("security/HidePasswordPreviewPanel"), Config::Security_HidePasswordPreviewPanel},
     {QS("security/passwordsrepeat"), Config::Security_PasswordsRepeatVisible},
     {QS("security/hidenotes"), Config::Security_HideNotes},
-    {QS("security/resettouchid"), Config::Security_ResetTouchId},
-    {QS("security/resettouchidtimeout"), Config::Security_ResetTouchIdTimeout},
-    {QS("security/resettouchidscreenlock"), Config::Security_ResetTouchIdScreenlock},
     {QS("KeeShare/Settings.own"), Config::KeeShare_Own},
     {QS("KeeShare/Settings.foreign"), Config::KeeShare_Foreign},
     {QS("KeeShare/Settings.active"), Config::KeeShare_Active},
@@ -353,10 +364,18 @@ static const QHash<QString, Config::ConfigKey> deprecationMap = {
     {QS("GUI/DarkTrayIcon"), Config::Deleted},
 
     // 2.7.0
+    {QS("GUI/HideGroupsPanel"), Config::Deleted},
     {QS("LastAttachmentDir"), Config::Deleted},
     {QS("KeeShare/LastDir"), Config::Deleted},
     {QS("KeeShare/LastKeyDir"), Config::Deleted},
-    {QS("KeeShare/LastShareDir"), Config::Deleted}};
+    {QS("KeeShare/LastShareDir"), Config::Deleted},
+    {QS("UseTouchID"), Config::Deleted},
+    {QS("Security/ResetTouchId"), Config::Deleted},
+    {QS("Security/ResetTouchIdTimeout"), Config::Deleted},
+    {QS("Security/ResetTouchIdScreenlock"), Config::Deleted},
+
+    // 2.8.0
+    {QS("GUI/AdvancedSettings"), Config::Deleted}};
 
 /**
  * Migrate settings from previous versions.
@@ -441,9 +460,7 @@ Config::Config(QObject* parent)
     init(configFiles.first, configFiles.second);
 }
 
-Config::~Config()
-{
-}
+Config::~Config() = default;
 
 void Config::init(const QString& configFileName, const QString& localConfigFileName)
 {
@@ -457,6 +474,28 @@ void Config::init(const QString& configFileName, const QString& localConfigFileN
         QDir().rmdir(QFileInfo(localConfigFileName).absolutePath());
     }
 
+#if defined(Q_OS_LINUX)
+    // Upgrade from previous KeePassXC version which stores its config
+    // in ~/.cache on Linux instead of ~/.local/state.
+    // Move file to correct location before continuing.
+    if (!QFile::exists(localConfigFileName)) {
+        QString oldLocalConfigPath =
+            QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + "/keepassxc";
+        QString suffix;
+#ifdef QT_DEBUG
+        suffix = "_debug";
+#endif
+        oldLocalConfigPath += QString("/keepassxc%1.ini").arg(suffix);
+        oldLocalConfigPath = QDir::toNativeSeparators(oldLocalConfigPath);
+        if (QFile::exists(oldLocalConfigPath)) {
+            QDir().mkpath(QFileInfo(localConfigFileName).absolutePath());
+            QFile::copy(oldLocalConfigPath, localConfigFileName);
+            QFile::remove(oldLocalConfigPath);
+            QDir().rmdir(QFileInfo(oldLocalConfigPath).absolutePath());
+        }
+    }
+#endif
+
     m_settings.reset(new QSettings(configFileName, QSettings::IniFormat));
     if (!localConfigFileName.isEmpty() && configFileName != localConfigFileName) {
         m_localSettings.reset(new QSettings(localConfigFileName, QSettings::IniFormat));
@@ -469,8 +508,19 @@ void Config::init(const QString& configFileName, const QString& localConfigFileN
 QPair<QString, QString> Config::defaultConfigFiles()
 {
     // Check if we are running in portable mode, if so store the config files local to the app
+#ifdef Q_OS_WIN
+    // Enable QFileInfo::isWritable check on Windows
+    extern Q_CORE_EXPORT int qt_ntfs_permission_lookup;
+    qt_ntfs_permission_lookup++;
+#endif
     auto portablePath = QCoreApplication::applicationDirPath().append("/%1");
-    if (QFile::exists(portablePath.arg(".portable"))) {
+    auto portableFile = portablePath.arg(".portable");
+    bool isPortable = QFile::exists(portableFile) && QFileInfo(portableFile).isWritable();
+#ifdef Q_OS_WIN
+    qt_ntfs_permission_lookup--;
+#endif
+
+    if (isPortable) {
         return {portablePath.arg("config/keepassxc.ini"), portablePath.arg("config/keepassxc_local.ini")};
     }
 
@@ -486,7 +536,16 @@ QPair<QString, QString> Config::defaultConfigFiles()
 #else
     // On case-sensitive Operating Systems, force use of lowercase app directories
     configPath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + "/keepassxc";
-    localConfigPath = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation) + "/keepassxc";
+    // Qt does not support XDG_STATE_HOME yet, change this once XDG_STATE_HOME is added
+    QString xdgStateHome = QFile::decodeName(qgetenv("XDG_STATE_HOME"));
+    if (!xdgStateHome.startsWith(u'/')) {
+        xdgStateHome.clear(); // spec says relative paths should be ignored
+    }
+    if (xdgStateHome.isEmpty()) {
+        xdgStateHome = QDir::homePath() + "/.local/state";
+    }
+
+    localConfigPath = xdgStateHome + "/keepassxc";
 #endif
 
     QString suffix;
@@ -537,6 +596,30 @@ void Config::createTempFileInstance()
     Q_UNUSED(openResult);
     m_instance = new Config(tmpFile->fileName(), "", qApp);
     tmpFile->setParent(m_instance);
+}
+
+QList<Config::ShortcutEntry> Config::getShortcuts() const
+{
+    m_settings->beginGroup("Shortcuts");
+    const auto keys = m_settings->childKeys();
+    QList<ShortcutEntry> ret;
+    ret.reserve(keys.size());
+    for (const auto& key : keys) {
+        const auto shortcut = m_settings->value(key).toString();
+        ret.push_back(ShortcutEntry{key, shortcut});
+    }
+    m_settings->endGroup();
+    return ret;
+}
+
+void Config::setShortcuts(const QList<ShortcutEntry>& shortcuts)
+{
+    m_settings->beginGroup("Shortcuts");
+    m_settings->remove(""); // clear previous
+    for (const auto& shortcutEntry : shortcuts) {
+        m_settings->setValue(shortcutEntry.name, shortcutEntry.shortcut);
+    }
+    m_settings->endGroup();
 }
 
 #undef QS

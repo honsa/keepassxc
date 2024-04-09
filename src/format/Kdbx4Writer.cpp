@@ -19,10 +19,14 @@
 
 #include <QBuffer>
 
+#include "config-keepassx.h"
 #include "crypto/CryptoHash.h"
 #include "crypto/Random.h"
-#include "format/KdbxXmlWriter.h"
 #include "format/KeePass2RandomStream.h"
+#ifdef WITH_XC_KEESHARE
+#include "keeshare/KeeShare.h"
+#include "keeshare/KeeShareSettings.h"
+#endif
 #include "streams/HmacBlockStream.h"
 #include "streams/SymmetricCipherStream.h"
 #include "streams/qtiocompressor.h"
@@ -66,7 +70,7 @@ bool Kdbx4Writer::writeDatabase(QIODevice* device, Database* db)
         QBuffer header;
         header.open(QIODevice::WriteOnly);
 
-        writeMagicNumbers(&header, KeePass2::SIGNATURE_1, KeePass2::SIGNATURE_2, formatVersion());
+        writeMagicNumbers(&header, KeePass2::SIGNATURE_1, KeePass2::SIGNATURE_2, db->formatVersion());
 
         CHECK_RETURN_FALSE(
             writeHeaderField<quint32>(&header, KeePass2::HeaderFieldID::CipherID, db->cipher().toRfc4122()));
@@ -156,7 +160,7 @@ bool Kdbx4Writer::writeDatabase(QIODevice* device, Database* db)
         writeInnerHeaderField(outputDevice, KeePass2::InnerHeaderFieldID::InnerRandomStreamKey, protectedStreamKey));
 
     // Write attachments to the inner header
-    writeAttachments(outputDevice, db);
+    auto idxMap = writeAttachments(outputDevice, db);
 
     CHECK_RETURN_FALSE(writeInnerHeaderField(outputDevice, KeePass2::InnerHeaderFieldID::End, QByteArray()));
 
@@ -166,7 +170,7 @@ bool Kdbx4Writer::writeDatabase(QIODevice* device, Database* db)
         return false;
     }
 
-    KdbxXmlWriter xmlWriter(formatVersion());
+    KdbxXmlWriter xmlWriter(db->formatVersion(), idxMap);
     xmlWriter.writeDatabase(outputDevice, db, &randomStream, headerHash);
 
     // Explicitly close/reset streams so they are flushed and we can detect
@@ -211,25 +215,42 @@ bool Kdbx4Writer::writeInnerHeaderField(QIODevice* device, KeePass2::InnerHeader
     return true;
 }
 
-void Kdbx4Writer::writeAttachments(QIODevice* device, Database* db)
+KdbxXmlWriter::BinaryIdxMap Kdbx4Writer::writeAttachments(QIODevice* device, Database* db)
 {
     const QList<Entry*> allEntries = db->rootGroup()->entriesRecursive(true);
-    QSet<QByteArray> writtenAttachments;
+    QHash<QByteArray, qint64> writtenAttachments;
+    KdbxXmlWriter::BinaryIdxMap idxMap;
+    qint64 nextIdx = 0;
 
-    for (Entry* entry : allEntries) {
+    for (const Entry* entry : allEntries) {
         const QList<QString> attachmentKeys = entry->attachments()->keys();
         for (const QString& key : attachmentKeys) {
             QByteArray data("\x01");
             data.append(entry->attachments()->value(key));
 
-            if (writtenAttachments.contains(data)) {
-                continue;
+            CryptoHash hash(CryptoHash::Sha256);
+#ifdef WITH_XC_KEESHARE
+            // Namespace KeeShare attachments so they don't get deduplicated together with attachments
+            // from other databases. Prevents potential filesize side channels.
+            if (auto shared = KeeShare::resolveSharedGroup(entry->group())) {
+                hash.addData(KeeShare::referenceOf(shared).uuid.toByteArray());
+            } else {
+                hash.addData(db->uuid().toByteArray());
             }
+#endif
+            hash.addData(data);
 
-            writeInnerHeaderField(device, KeePass2::InnerHeaderFieldID::Binary, data);
-            writtenAttachments.insert(data);
+            // Deduplicate attachments with the same hash
+            const auto hashResult = hash.result();
+            if (!writtenAttachments.contains(hashResult)) {
+                writeInnerHeaderField(device, KeePass2::InnerHeaderFieldID::Binary, data);
+                writtenAttachments.insert(hashResult, nextIdx++);
+            }
+            idxMap.insert(qMakePair(entry, key), writtenAttachments[hashResult]);
         }
     }
+
+    return idxMap;
 }
 
 /**
@@ -305,9 +326,4 @@ bool Kdbx4Writer::serializeVariantMap(const QVariantMap& map, QByteArray& output
     endBytes.append(static_cast<char>(KeePass2::VariantMapFieldType::End));
     CHECK_RETURN_FALSE(buf.write(endBytes) == 1);
     return true;
-}
-
-quint32 Kdbx4Writer::formatVersion()
-{
-    return KeePass2::FILE_VERSION_4;
 }

@@ -23,6 +23,7 @@
 #include <QPointer>
 
 #include "fdosecrets/dbus/DBusTypes.h"
+#include "gui/MessageBox.h"
 
 class MainWindow;
 class Database;
@@ -47,6 +48,7 @@ class SessionProxy;
 class PromptProxy;
 
 class QAbstractItemView;
+class QSignalSpy;
 
 class TestGuiFdoSecrets : public QObject
 {
@@ -64,39 +66,52 @@ private slots:
     void testServiceEnable();
     void testServiceEnableNoExposedDatabase();
     void testServiceSearch();
+    void testServiceSearchBlockingUnlock();
+    void testServiceSearchBlockingUnlockMultiple();
+    void testServiceSearchForce();
     void testServiceUnlock();
+    void testServiceUnlockDatabaseConcurrent();
     void testServiceUnlockItems();
+    void testServiceUnlockItemsIncludeFutureEntries();
     void testServiceLock();
+    void testServiceLockConcurrent();
 
     void testSessionOpen();
     void testSessionClose();
 
     void testCollectionCreate();
     void testCollectionDelete();
+    void testCollectionDeleteConcurrent();
     void testCollectionChange();
 
     void testItemCreate();
+    void testItemCreateUnlock();
     void testItemChange();
     void testItemReplace();
     void testItemReplaceExistingLocked();
     void testItemSecret();
     void testItemDelete();
     void testItemLockState();
+    void testItemRejectSetReferenceFields();
 
     void testAlias();
     void testDefaultAliasAlwaysPresent();
 
     void testExposeSubgroup();
     void testModifyingExposedGroup();
+    void testNoExposeRecycleBin();
 
     void testHiddenFilename();
     void testDuplicateName();
 
-protected slots:
-    void driveNewDatabaseWizard();
-    bool driveAccessControlDialog(bool remember = true);
-
 private:
+    bool driveUnlockDialog(DatabaseWidget* target = nullptr);
+    bool driveNewDatabaseWizard();
+    bool driveAccessControlDialog(bool remember = true, bool includeFutureEntries = false);
+    bool waitForSignal(QSignalSpy& spy, int expectedCount);
+
+    void processEvents();
+
     void lockDatabaseInBackend();
     void unlockDatabaseInBackend();
     QSharedPointer<ServiceProxy> enableService();
@@ -109,7 +124,10 @@ private:
                                          const QString& pass,
                                          const FdoSecrets::wire::StringStringMap& attr,
                                          bool replace,
-                                         bool expectPrompt = false);
+                                         bool expectPrompt = false,
+                                         bool expectUnlockPrompt = false);
+    FdoSecrets::wire::Secret
+    encryptPassword(QByteArray value, QString contentType, const QSharedPointer<SessionProxy>& sess);
     template <typename Proxy> QSharedPointer<Proxy> getProxy(const QDBusObjectPath& path) const
     {
         auto ret = QSharedPointer<Proxy>{

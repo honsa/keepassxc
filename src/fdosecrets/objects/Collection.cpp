@@ -24,7 +24,9 @@
 
 #include "core/Tools.h"
 #include "gui/DatabaseWidget.h"
+#include "gui/GuiTools.h"
 
+#include <QEventLoop>
 #include <QFileInfo>
 
 namespace FdoSecrets
@@ -62,9 +64,9 @@ namespace FdoSecrets
 
         // delete all items
         // this has to be done because the backend is actually still there, just we don't expose them
-        // NOTE: Do NOT use a for loop, because Item::doDelete will remove itself from m_items.
+        // NOTE: Do NOT use a for loop, because Item::removeFromDBus will remove itself from m_items.
         while (!m_items.isEmpty()) {
-            m_items.first()->doDelete();
+            m_items.first()->removeFromDBus();
         }
         cleanupConnections();
         dbus()->unregisterObject(this);
@@ -91,7 +93,7 @@ namespace FdoSecrets
     void Collection::reloadBackendOrDelete()
     {
         if (!reloadBackend()) {
-            doDelete();
+            removeFromDBus();
         }
     }
 
@@ -194,31 +196,21 @@ namespace FdoSecrets
         return {};
     }
 
-    DBusResult Collection::remove(const DBusClientPtr& client, PromptBase*& prompt)
+    DBusResult Collection::remove(PromptBase*& prompt)
     {
         auto ret = ensureBackend();
         if (ret.err()) {
             return ret;
         }
 
-        // Delete means close database
         prompt = PromptBase::Create<DeleteCollectionPrompt>(service(), this);
         if (!prompt) {
             return QDBusError::InternalError;
         }
-        if (backendLocked()) {
-            // this won't raise a dialog, immediate execute
-            ret = prompt->prompt(client, {});
-            if (ret.err()) {
-                return ret;
-            }
-            prompt = nullptr;
-        }
-        // defer the close to the prompt
         return {};
     }
 
-    DBusResult Collection::searchItems(const StringStringMap& attributes, QList<Item*>& items)
+    DBusResult Collection::searchItems(const DBusClientPtr&, const StringStringMap& attributes, QList<Item*>& items)
     {
         items.clear();
 
@@ -226,8 +218,8 @@ namespace FdoSecrets
         if (ret.err()) {
             return ret;
         }
-        ret = ensureUnlocked();
-        if (ret.err()) {
+
+        if (backendLocked()) {
             // searchItems should work, whether `this` is locked or not.
             // however, we can't search items the same way as in gnome-keying,
             // because there's no database at all when locked.
@@ -258,10 +250,19 @@ namespace FdoSecrets
             terms << attributeToTerm(it.key(), it.value());
         }
 
-        const auto foundEntries = EntrySearcher(false, true).search(terms, m_exposedGroup);
+        constexpr auto caseSensitive = false;
+        constexpr auto skipProtected = true;
+        constexpr auto forceSearch = true;
+        const auto foundEntries =
+            EntrySearcher(caseSensitive, skipProtected).search(terms, m_exposedGroup, forceSearch);
         items.reserve(foundEntries.size());
         for (const auto& entry : foundEntries) {
-            items << m_entryToItem.value(entry);
+            const auto item = m_entryToItem.value(entry);
+            // it's possible that we don't have a corresponding item for the entry
+            // this can happen when the recycle bin is below the exposed group.
+            if (item) {
+                items << item;
+            }
         }
         return {};
     }
@@ -279,11 +280,10 @@ namespace FdoSecrets
         term.field = attrKeyToField.value(key, EntrySearcher::Field::AttributeValue);
         term.word = key;
         term.exclude = false;
-
-        const auto useWildcards = false;
-        const auto exactMatch = true;
-        const auto caseSensitive = true;
-        term.regex = Tools::convertToRegex(QRegularExpression::escape(value), useWildcards, exactMatch, caseSensitive);
+        term.regex =
+            Tools::convertToRegex(value,
+                                  Tools::RegexConvertOpts::EXACT_MATCH | Tools::RegexConvertOpts::CASE_SENSITIVE
+                                      | Tools::RegexConvertOpts::ESCAPE_REGEX);
 
         return term;
     }
@@ -298,36 +298,10 @@ namespace FdoSecrets
         if (ret.err()) {
             return ret;
         }
-        ret = ensureUnlocked();
-        if (ret.err()) {
-            return ret;
-        }
 
         item = nullptr;
-        QString itemPath;
 
-        auto iterAttr = properties.find(DBUS_INTERFACE_SECRET_ITEM + ".Attributes");
-        if (iterAttr != properties.end()) {
-            // the actual value in iterAttr.value() is QDBusArgument, which represents a structure
-            // and qt has no idea what this corresponds to.
-            // we thus force a conversion to StringStringMap here. The conversion is registered in
-            // DBusTypes.cpp
-            auto attributes = iterAttr.value().value<StringStringMap>();
-
-            itemPath = attributes.value(ItemAttributes::PathKey);
-
-            // check existing item using attributes
-            QList<Item*> existing;
-            ret = searchItems(attributes, existing);
-            if (ret.err()) {
-                return ret;
-            }
-            if (!existing.isEmpty() && replace) {
-                item = existing.front();
-            }
-        }
-
-        prompt = PromptBase::Create<CreateItemPrompt>(service(), this, properties, secret, itemPath, item);
+        prompt = PromptBase::Create<CreateItemPrompt>(service(), this, properties, secret, replace);
         if (!prompt) {
             return QDBusError::InternalError;
         }
@@ -418,7 +392,7 @@ namespace FdoSecrets
     void Collection::onDatabaseLockChanged()
     {
         if (!reloadBackend()) {
-            doDelete();
+            removeFromDBus();
             return;
         }
         emit collectionLockChanged(backendLocked());
@@ -434,9 +408,9 @@ namespace FdoSecrets
 
         auto newUuid = FdoSecrets::settings()->exposedGroup(m_backend->database());
         auto newGroup = m_backend->database()->rootGroup()->findGroupByUuid(newUuid);
-        if (!newGroup || inRecycleBin(newGroup)) {
+        if (!newGroup || newGroup->isRecycled()) {
             // no exposed group, delete self
-            doDelete();
+            removeFromDBus();
             return;
         }
 
@@ -470,7 +444,7 @@ namespace FdoSecrets
         });
         // Another possibility is the group being moved to recycle bin.
         connect(m_exposedGroup.data(), &Group::modified, this, [this]() {
-            if (inRecycleBin(m_exposedGroup->parentGroup())) {
+            if (m_exposedGroup->isRecycled()) {
                 // reset the exposed group to none
                 FdoSecrets::settings()->setExposedGroup(m_backend->database().data(), {});
             }
@@ -505,7 +479,7 @@ namespace FdoSecrets
         // this has to be done because the backend is actually still there
         // just we don't expose them
         for (const auto& item : asConst(m_items)) {
-            item->doDelete();
+            item->removeFromDBus();
         }
 
         // repopulate
@@ -516,18 +490,22 @@ namespace FdoSecrets
 
     void Collection::onEntryAdded(Entry* entry, bool emitSignal)
     {
-        if (inRecycleBin(entry)) {
+        if (entry->isRecycled()) {
             return;
         }
 
         auto item = Item::Create(this, entry);
+        if (!item) {
+            return;
+        }
+
         m_items << item;
         m_entryToItem[entry] = item;
 
         // forward delete signals
         connect(entry->group(), &Group::entryAboutToRemove, item, [item](Entry* toBeRemoved) {
             if (item->backend() == toBeRemoved) {
-                item->doDelete();
+                item->removeFromDBus();
             }
         });
 
@@ -546,7 +524,7 @@ namespace FdoSecrets
 
     void Collection::connectGroupSignalRecursive(Group* group)
     {
-        if (inRecycleBin(group)) {
+        if (group->isRecycled()) {
             return;
         }
 
@@ -568,17 +546,26 @@ namespace FdoSecrets
     {
         Q_ASSERT(m_backend);
 
-        return m_backend->lock();
+        // do not call m_backend->lock() directly
+        // let the service handle locking which handles concurrent calls
+        return service()->doLockDatabase(m_backend);
     }
 
     void Collection::doUnlock()
     {
         Q_ASSERT(m_backend);
 
-        service()->doUnlockDatabaseInDialog(m_backend);
+        return service()->doUnlockDatabaseInDialog(m_backend);
     }
 
-    void Collection::doDelete()
+    bool Collection::doDelete()
+    {
+        Q_ASSERT(m_backend);
+
+        return service()->doCloseDatabase(m_backend);
+    }
+
+    void Collection::removeFromDBus()
     {
         if (!m_backend) {
             // I'm already deleted
@@ -637,9 +624,18 @@ namespace FdoSecrets
         return !m_backend || !m_backend->database()->isInitialized() || m_backend->isLocked();
     }
 
-    void Collection::doDeleteEntries(QList<Entry*> entries)
+    bool Collection::doDeleteEntry(Entry* entry)
     {
-        m_backend->deleteEntries(std::move(entries), FdoSecrets::settings()->confirmDeleteItem());
+        // Confirm entry removal before moving forward
+        bool permanent = entry->isRecycled() || !m_backend->database()->metadata()->recycleBinEnabled();
+        if (FdoSecrets::settings()->confirmDeleteItem()
+            && !GuiTools::confirmDeleteEntries(m_backend, {entry}, permanent)) {
+            return false;
+        }
+
+        auto num = GuiTools::deleteEntriesResolveReferences(m_backend, {entry}, permanent);
+
+        return num != 0;
     }
 
     Group* Collection::findCreateGroupByPath(const QString& groupPath)
@@ -666,33 +662,6 @@ namespace FdoSecrets
         group->setParent(parentGroup);
 
         return group;
-    }
-
-    bool Collection::inRecycleBin(Group* group) const
-    {
-        Q_ASSERT(m_backend);
-
-        if (!group) {
-            // the root group's parent is nullptr, we treat it as not in recycle bin.
-            return false;
-        }
-
-        if (!m_backend->database()->metadata()) {
-            return false;
-        }
-
-        auto recycleBin = m_backend->database()->metadata()->recycleBin();
-        if (!recycleBin) {
-            return false;
-        }
-
-        return group->uuid() == recycleBin->uuid() || group->isRecycled();
-    }
-
-    bool Collection::inRecycleBin(Entry* entry) const
-    {
-        Q_ASSERT(entry);
-        return inRecycleBin(entry->group());
     }
 
     Item* Collection::doNewItem(const DBusClientPtr& client, QString itemPath)

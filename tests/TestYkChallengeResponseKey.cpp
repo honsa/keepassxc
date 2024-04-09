@@ -43,16 +43,13 @@ void TestYubiKeyChallengeResponse::testDetectDevices()
 {
     YubiKey::instance()->findValidKeys();
 
-    // Wait for the hardware to respond
-    QSignalSpy detected(YubiKey::instance(), SIGNAL(detectComplete(bool)));
-    QTRY_VERIFY_WITH_TIMEOUT(detected.count() > 0, 2000);
-
     // Look at the information retrieved from the key(s)
-    for (auto key : YubiKey::instance()->foundKeys()) {
-        auto displayName = YubiKey::instance()->getDisplayName(key);
+    const auto foundKeys = YubiKey::instance()->foundKeys();
+    for (auto i = foundKeys.cbegin(); i != foundKeys.cend(); ++i) {
+        const auto& displayName = i.value();
         QVERIFY(displayName.contains("Challenge-Response - Slot") || displayName.contains("Configured Slot -"));
-        QVERIFY(displayName.contains(QString::number(key.first)));
-        QVERIFY(displayName.contains(QString::number(key.second)));
+        QVERIFY(displayName.contains(QString::number(i.key().first)));
+        QVERIFY(displayName.contains(QString::number(i.key().second)));
     }
 }
 
@@ -63,7 +60,7 @@ void TestYubiKeyChallengeResponse::testDetectDevices()
  */
 void TestYubiKeyChallengeResponse::testKeyChallenge()
 {
-    auto keys = YubiKey::instance()->foundKeys();
+    auto keys = YubiKey::instance()->foundKeys().keys();
     if (keys.isEmpty()) {
         QSKIP("No YubiKey devices were detected.");
     }

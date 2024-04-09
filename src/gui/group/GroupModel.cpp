@@ -19,8 +19,12 @@
 
 #include <QMimeData>
 
+#include "core/Database.h"
 #include "core/Group.h"
 #include "core/Metadata.h"
+#include "core/Tools.h"
+#include "gui/DatabaseIcons.h"
+#include "gui/Icons.h"
 #include "keeshare/KeeShare.h"
 
 GroupModel::GroupModel(Database* db, QObject* parent)
@@ -70,7 +74,7 @@ int GroupModel::columnCount(const QModelIndex& parent) const
 QModelIndex GroupModel::index(int row, int column, const QModelIndex& parent) const
 {
     if (!hasIndex(row, column, parent)) {
-        return QModelIndex();
+        return {};
     }
 
     Group* group;
@@ -87,7 +91,7 @@ QModelIndex GroupModel::index(int row, int column, const QModelIndex& parent) co
 QModelIndex GroupModel::parent(const QModelIndex& index) const
 {
     if (!index.isValid()) {
-        return QModelIndex();
+        return {};
     }
 
     return parent(groupFromIndex(index));
@@ -99,7 +103,7 @@ QModelIndex GroupModel::parent(Group* group) const
 
     if (!parentGroup) {
         // index is already the root group
-        return QModelIndex();
+        return {};
     } else {
         const Group* grandParentGroup = parentGroup->parentGroup();
         if (!grandParentGroup) {
@@ -114,7 +118,7 @@ QModelIndex GroupModel::parent(Group* group) const
 QVariant GroupModel::data(const QModelIndex& index, int role) const
 {
     if (!index.isValid()) {
-        return QVariant();
+        return {};
     }
 
     Group* group = groupFromIndex(index);
@@ -126,7 +130,7 @@ QVariant GroupModel::data(const QModelIndex& index, int role) const
 #endif
         return nameTemplate.arg(group->name());
     } else if (role == Qt::DecorationRole) {
-        return group->iconPixmap();
+        return Icons::groupIconPixmap(group);
     } else if (role == Qt::FontRole) {
         QFont font;
         if (group->isExpired()) {
@@ -141,7 +145,7 @@ QVariant GroupModel::data(const QModelIndex& index, int role) const
         }
         return tooltip;
     } else {
-        return QVariant();
+        return {};
     }
 }
 
@@ -151,7 +155,7 @@ QVariant GroupModel::headerData(int section, Qt::Orientation orientation, int ro
     Q_UNUSED(orientation);
     Q_UNUSED(role);
 
-    return QVariant();
+    return {};
 }
 
 QModelIndex GroupModel::index(Group* group) const
@@ -296,7 +300,7 @@ bool GroupModel::dropMimeData(const QMimeData* data,
             if (sourceDb != targetDb) {
                 QUuid customIcon = entry->iconUuid();
                 if (!customIcon.isNull() && !targetDb->metadata()->hasCustomIcon(customIcon)) {
-                    targetDb->metadata()->addCustomIcon(customIcon, sourceDb->metadata()->customIcon(customIcon));
+                    targetDb->metadata()->addCustomIcon(customIcon, sourceDb->metadata()->customIcon(customIcon).data);
                 }
 
                 // Reset the UUID when moving across db boundary
@@ -329,7 +333,7 @@ QMimeData* GroupModel::mimeData(const QModelIndexList& indexes) const
         return nullptr;
     }
 
-    QMimeData* data = new QMimeData();
+    auto data = new QMimeData();
     QByteArray encoded;
     QDataStream stream(&encoded, QIODevice::WriteOnly);
 

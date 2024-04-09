@@ -115,7 +115,7 @@ void TestEntry::testClone()
     QScopedPointer<Entry> entryCloneRename(entryOrg->clone(Entry::CloneRenameTitle));
     QCOMPARE(entryCloneRename->uuid(), entryOrg->uuid());
     QCOMPARE(entryCloneRename->title(), QString("New Title - Clone"));
-    // Cloning should not modify time info unless explicity requested
+    // Cloning should not modify time info unless explicitly requested
     QCOMPARE(entryCloneRename->timeInfo(), entryOrg->timeInfo());
 
     QScopedPointer<Entry> entryCloneResetTime(entryOrg->clone(Entry::CloneResetTimeInfo));
@@ -591,7 +591,7 @@ void TestEntry::testResolveClonedEntry()
 
 void TestEntry::testIsRecycled()
 {
-    Entry* entry = new Entry();
+    auto entry = new Entry();
     QVERIFY(!entry->isRecycled());
 
     Database db;
@@ -604,32 +604,32 @@ void TestEntry::testIsRecycled()
     db.recycleEntry(entry);
     QVERIFY(entry->isRecycled());
 
-    Group* group1 = new Group();
+    auto group1 = new Group();
     group1->setParent(root);
 
-    Entry* entry1 = new Entry();
+    auto entry1 = new Entry();
     entry1->setGroup(group1);
     QVERIFY(!entry1->isRecycled());
     db.recycleGroup(group1);
     QVERIFY(entry1->isRecycled());
 }
 
-void TestEntry::testMove()
+void TestEntry::testMoveUpDown()
 {
     Database db;
     Group* root = db.rootGroup();
     QVERIFY(root);
 
-    Entry* entry0 = new Entry();
+    auto entry0 = new Entry();
     QVERIFY(entry0);
     entry0->setGroup(root);
-    Entry* entry1 = new Entry();
+    auto entry1 = new Entry();
     QVERIFY(entry1);
     entry1->setGroup(root);
-    Entry* entry2 = new Entry();
+    auto entry2 = new Entry();
     QVERIFY(entry2);
     entry2->setGroup(root);
-    Entry* entry3 = new Entry();
+    auto entry3 = new Entry();
     QVERIFY(entry3);
     entry3->setGroup(root);
     // default order, straight
@@ -723,4 +723,48 @@ void TestEntry::testMove()
     QCOMPARE(root->entries().at(1), entry2);
     QCOMPARE(root->entries().at(2), entry1);
     QCOMPARE(root->entries().at(3), entry0);
+}
+
+void TestEntry::testPreviousParentGroup()
+{
+    Database db;
+    auto* root = db.rootGroup();
+    root->setUuid(QUuid::createUuid());
+    QVERIFY(!root->uuid().isNull());
+
+    auto* group1 = new Group();
+    group1->setUuid(QUuid::createUuid());
+    group1->setParent(root);
+    QVERIFY(!group1->uuid().isNull());
+
+    auto* group2 = new Group();
+    group2->setParent(root);
+    group2->setUuid(QUuid::createUuid());
+    QVERIFY(!group2->uuid().isNull());
+
+    auto* entry = new Entry();
+    QVERIFY(entry);
+    QVERIFY(entry->previousParentGroupUuid().isNull());
+    QVERIFY(!entry->previousParentGroup());
+
+    entry->setGroup(root);
+    QVERIFY(entry->previousParentGroupUuid().isNull());
+    QVERIFY(!entry->previousParentGroup());
+
+    // Previous parent shouldn't be recorded if new and old parent are the same
+    entry->setGroup(root);
+    QVERIFY(entry->previousParentGroupUuid().isNull());
+    QVERIFY(!entry->previousParentGroup());
+
+    entry->setGroup(group1);
+    QVERIFY(entry->previousParentGroupUuid() == root->uuid());
+    QVERIFY(entry->previousParentGroup() == root);
+
+    entry->setGroup(group2);
+    QVERIFY(entry->previousParentGroupUuid() == group1->uuid());
+    QVERIFY(entry->previousParentGroup() == group1);
+
+    entry->setGroup(group2);
+    QVERIFY(entry->previousParentGroupUuid() == group1->uuid());
+    QVERIFY(entry->previousParentGroup() == group1);
 }

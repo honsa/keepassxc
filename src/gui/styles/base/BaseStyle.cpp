@@ -41,7 +41,9 @@
 
 #ifdef Q_OS_MACOS
 #include <QMainWindow>
+#if QT_VERSION >= QT_VERSION_CHECK(5, 9, 0)
 #include <QOperatingSystemVersion>
+#endif
 #endif
 
 #include "gui/Icons.h"
@@ -279,16 +281,22 @@ namespace Phantom
 #ifdef Q_OS_MACOS
             QColor tabBarBase(const QPalette& pal)
             {
+#if QT_VERSION >= QT_VERSION_CHECK(5, 12, 10) && QT_VERSION < QT_VERSION_CHECK(5, 13, 0)                               \
+    || QT_VERSION >= QT_VERSION_CHECK(5, 15, 1)
                 if (QOperatingSystemVersion::current() >= QOperatingSystemVersion::MacOSBigSur) {
                     return hack_isLightPalette(pal) ? QRgb(0xD4D4D4) : QRgb(0x2A2A2A);
                 }
+#endif
                 return hack_isLightPalette(pal) ? QRgb(0xDD1D1D1) : QRgb(0x252525);
             }
             QColor tabBarBaseInactive(const QPalette& pal)
             {
+#if QT_VERSION >= QT_VERSION_CHECK(5, 12, 10) && QT_VERSION < QT_VERSION_CHECK(5, 13, 0)                               \
+    || QT_VERSION >= QT_VERSION_CHECK(5, 15, 1)
                 if (QOperatingSystemVersion::current() >= QOperatingSystemVersion::MacOSBigSur) {
                     return hack_isLightPalette(pal) ? QRgb(0xF5F5F5) : QRgb(0x2D2D2D);
                 }
+#endif
                 return hack_isLightPalette(pal) ? QRgb(0xF4F4F4) : QRgb(0x282828);
             }
 #endif
@@ -585,7 +593,7 @@ namespace Phantom
                 } else {
                     // Remove the oldest guy from the cache. Remember that because we may
                     // re-enter QStyle functions multiple times when drawing or calculating
-                    // something, we may have to load several swaitches derived from
+                    // something, we may have to load several switches derived from
                     // different QPalettes on different stack frames at the same time. But as
                     // an extra cost-savings measure, we'll check and see if something else
                     // has a reference to the removed guy. If there aren't any references to
@@ -765,9 +773,7 @@ namespace Phantom
             static MenuItemMetrics ofFontHeight(int fontHeight);
 
         private:
-            MenuItemMetrics()
-            {
-            }
+            MenuItemMetrics() = default;
         };
 
         MenuItemMetrics MenuItemMetrics::ofFontHeight(int fontHeight)
@@ -780,7 +786,7 @@ namespace Phantom
             m.rightMarginForArrow = static_cast<int>(fontHeight * MenuItem_RightMarginForArrowFontRatio);
             m.topMargin = static_cast<int>(fontHeight * MenuItem_VerticalMarginsFontRatio);
             m.bottomMargin = static_cast<int>(fontHeight * MenuItem_VerticalMarginsFontRatio);
-            int checkVMargin = static_cast<int>(fontHeight * MenuItem_CheckMarkVerticalInsetFontRatio);
+            auto checkVMargin = static_cast<int>(fontHeight * MenuItem_CheckMarkVerticalInsetFontRatio);
             int checkHeight = fontHeight - checkVMargin * 2;
             if (checkHeight < 0)
                 checkHeight = 0;
@@ -809,7 +815,7 @@ namespace Phantom
         menuItemCheckRect(const MenuItemMetrics& metrics, Qt::LayoutDirection direction, QRect itemRect, bool hasArrow)
         {
             QRect r = menuItemContentRect(metrics, itemRect, hasArrow);
-            int checkVMargin = static_cast<int>(metrics.fontHeight * MenuItem_CheckMarkVerticalInsetFontRatio);
+            auto checkVMargin = static_cast<int>(metrics.fontHeight * MenuItem_CheckMarkVerticalInsetFontRatio);
             if (checkVMargin < 0)
                 checkVMargin = 0;
             r.setSize(QSize(metrics.checkWidth, metrics.fontHeight));
@@ -1043,7 +1049,7 @@ namespace Phantom
         // Expected time (release): 5usecs for regular-sized arrows
         Q_NEVER_INLINE void drawArrow(QPainter* p, QRect rect, Qt::ArrowType arrowDirection, const QBrush& brush)
         {
-            const qreal ArrowBaseRatio = 0.70;
+            const qreal ArrowBaseRatio = 0.9;
             qreal irx, iry, irw, irh;
             QRectF(rect).getRect(&irx, &iry, &irw, &irh);
             if (irw < 1.0 || irh < 1.0)
@@ -1148,11 +1154,11 @@ namespace Phantom
             points[0] = QPointF(0.0, 0.55);
             points[1] = QPointF(0.4, 1.0);
             points[2] = QPointF(1.0, 0);
-            for (int i = 0; i < 3; ++i) {
-                QPointF pnt = points[i];
+            for (auto& point : points) {
+                QPointF pnt = point;
                 pnt.setX(pnt.x() * dimx + x);
                 pnt.setY(pnt.y() * dimy + y);
-                points[i] = pnt;
+                point = pnt;
             }
             scratchPen.setBrush(swatch.brush(color));
             scratchPen.setCapStyle(Qt::RoundCap);
@@ -1663,7 +1669,7 @@ void BaseStyle::drawPrimitive(PrimitiveElement elem,
         if (arrow == Qt::DownArrow && !qstyleoption_cast<const QStyleOptionToolButton*>(option) && widget) {
             auto tbutton = qobject_cast<const QToolButton*>(widget);
             if (tbutton && tbutton->popupMode() != QToolButton::InstantPopup && tbutton->defaultAction()) {
-                int dim = static_cast<int>(qMin(rw, rh) * 0.25);
+                auto dim = static_cast<int>(qMin(rw, rh) * 0.25);
                 aw -= dim;
                 ah -= dim;
                 // We have another hack in PE_IndicatorButtonDropDown where we shift
@@ -1930,7 +1936,7 @@ void BaseStyle::drawPrimitive(PrimitiveElement elem,
         auto fropt = qstyleoption_cast<const QStyleOptionFocusRect*>(option);
         if (!fropt)
             break;
-        //### check for d->alt_down
+        // ### check for d->alt_down
         if (!(fropt->state & State_KeyboardFocusChange))
             return;
         if (fropt->state & State_Item) {
@@ -2464,7 +2470,7 @@ void BaseStyle::drawControl(ControlElement element,
             QPixmap pixmap = header->icon.pixmap(window,
                                                  QSize(iconExtent, iconExtent),
                                                  (header->state & State_Enabled) ? QIcon::Normal : QIcon::Disabled);
-            int pixw = static_cast<int>(pixmap.width() / pixmap.devicePixelRatio());
+            auto pixw = static_cast<int>(pixmap.width() / pixmap.devicePixelRatio());
             QRect aligned = alignedRect(
                 header->direction, QFlag(header->iconAlignment), pixmap.size() / pixmap.devicePixelRatio(), rect);
             QRect inter = aligned.intersected(rect);
@@ -2737,8 +2743,8 @@ void BaseStyle::drawControl(ControlElement element,
             }
             QWindow* window = widget ? widget->windowHandle() : nullptr;
             QPixmap pixmap = menuItem->icon.pixmap(window, iconSize, mode, state);
-            const int pixw = static_cast<int>(pixmap.width() / pixmap.devicePixelRatio());
-            const int pixh = static_cast<int>(pixmap.height() / pixmap.devicePixelRatio());
+            const auto pixw = static_cast<int>(pixmap.width() / pixmap.devicePixelRatio());
+            const auto pixh = static_cast<int>(pixmap.height() / pixmap.devicePixelRatio());
             QRect pixmapRect = QStyle::alignedRect(option->direction, Qt::AlignCenter, QSize(pixw, pixh), iconRect);
             painter->drawPixmap(pixmapRect.topLeft(), pixmap);
         }
@@ -2764,7 +2770,7 @@ void BaseStyle::drawControl(ControlElement element,
             // that when it is resolved against the device, this font will win. This
             // is mainly to handle cases where someone sets the font on the window
             // and then the combo inherits it and passes it onward. At that point the
-            // resolve mask is very, very weak. This makes it stonger.
+            // resolve mask is very, very weak. This makes it stronger.
 #if 0
                 QFont font = menuItem->font;
       font.setPointSizeF(QFontInfo(menuItem->font).pointSizeF());
@@ -2875,8 +2881,8 @@ void BaseStyle::drawControl(ControlElement element,
             QIcon::State state = button->state & State_On ? QIcon::On : QIcon::Off;
             auto window = widget ? widget->window()->windowHandle() : nullptr;
             QPixmap pixmap = button->icon.pixmap(window, button->iconSize, mode, state);
-            int pixmapWidth = static_cast<int>(pixmap.width() / pixmap.devicePixelRatio());
-            int pixmapHeight = static_cast<int>(pixmap.height() / pixmap.devicePixelRatio());
+            auto pixmapWidth = static_cast<int>(pixmap.width() / pixmap.devicePixelRatio());
+            auto pixmapHeight = static_cast<int>(pixmap.height() / pixmap.devicePixelRatio());
             int labelWidth = pixmapWidth;
             int labelHeight = pixmapHeight;
             // 4 is hardcoded in QPushButton::sizeHint()
@@ -3268,7 +3274,7 @@ void BaseStyle::drawComplexControl(ComplexControl control,
 
         {
             // Fill title
-            QColor titlebarColor = QColor(active ? highlight : palette.background().color());
+            auto titlebarColor = QColor(active ? highlight : palette.background().color());
             painter->fillRect(option->rect.adjusted(1, 1, -1, 0), titlebarColor);
             // Frame and rounded corners
             painter->setPen(titleBarFrameBorder);
@@ -3971,14 +3977,14 @@ QSize BaseStyle::sizeFromContents(ContentsType type,
         if (!btn->icon.isNull() || !btn->text.isEmpty())
             margins =
                 proxy()->pixelMetric(isRadio ? PM_RadioButtonLabelSpacing : PM_CheckBoxLabelSpacing, option, widget);
-        return QSize(size.width() + w + margins, qMax(size.height(), h));
+        return {size.width() + w + margins, qMax(size.height(), h)};
     }
     case CT_MenuBarItem: {
         int fontHeight = option ? option->fontMetrics.height() : size.height();
-        int w = static_cast<int>(fontHeight * Ph::MenuBar_HorizontalPaddingFontRatio);
-        int h = static_cast<int>(fontHeight * Ph::MenuBar_VerticalPaddingFontRatio);
+        auto w = static_cast<int>(fontHeight * Ph::MenuBar_HorizontalPaddingFontRatio);
+        auto h = static_cast<int>(fontHeight * Ph::MenuBar_VerticalPaddingFontRatio);
         int line = Ph::dpiScaled(1);
-        return QSize(size.width() + w * 2, size.height() + h * 2 + line);
+        return {size.width() + w * 2, size.height() + h * 2 + line};
     }
     case CT_MenuItem: {
         auto menuItem = qstyleoption_cast<const QStyleOptionMenuItem*>(option);
@@ -4105,7 +4111,7 @@ QSize BaseStyle::sizeFromContents(ContentsType type,
             xadd += 2;
             yadd += 2;
         }
-        return QSize(size.width() + xadd, size.height() + yadd);
+        return {size.width() + xadd, size.height() + yadd};
     }
     case CT_ItemViewItem: {
         auto vopt = qstyleoption_cast<const QStyleOptionViewItem*>(option);
@@ -4168,7 +4174,8 @@ QSize BaseStyle::sizeFromContents(ContentsType type,
         auto pbopt = qstyleoption_cast<const QStyleOptionButton*>(option);
         if (!pbopt || pbopt->text.isEmpty())
             break;
-        int hpad = static_cast<int>(pbopt->fontMetrics.height() * Phantom::PushButton_HorizontalPaddingFontHeightRatio);
+        auto hpad =
+            static_cast<int>(pbopt->fontMetrics.height() * Phantom::PushButton_HorizontalPaddingFontHeightRatio);
         newSize.rwidth() += hpad * 2;
         if (widget && qobject_cast<const QDialogButtonBox*>(widget->parent())) {
             int dialogButtonMinWidth = Phantom::dpiScaled(80);
@@ -4326,7 +4333,7 @@ QRect BaseStyle::subControlRect(ComplexControl control,
             break;
         case SC_SpinBoxDown:
             if (spinbox->buttonSymbols == QAbstractSpinBox::NoButtons)
-                return QRect();
+                return {};
 
             rect = QRect(x, center, buttonWidth, spinbox->rect.bottom() - center - fw + 1);
             break;
@@ -4420,13 +4427,13 @@ QRect BaseStyle::subControlRect(ComplexControl control,
     case CC_ComboBox: {
         auto cb = qstyleoption_cast<const QStyleOptionComboBox*>(option);
         if (!cb)
-            return QRect();
+            return {};
         int frame = cb->frame ? proxy()->pixelMetric(PM_ComboBoxFrameWidth, cb, widget) : 0;
         QRect r = option->rect;
         r.adjust(frame, frame, -frame, -frame);
         int dim = qMin(r.width(), r.height());
         if (dim < 1)
-            return QRect();
+            return {};
         switch (subControl) {
         case SC_ComboBoxFrame:
             return cb->rect;

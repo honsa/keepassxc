@@ -1,6 +1,6 @@
 /*
  *  Copyright (C) 2013 Felix Geyer <debfx@fobos.de>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2022 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 #define KEEPASSX_PASSWORDGENERATORWIDGET_H
 
 #include <QComboBox>
+#include <QTimer>
 
 #include "core/PassphraseGenerator.h"
 #include "core/PasswordGenerator.h"
@@ -45,7 +46,7 @@ public:
     };
 
     explicit PasswordGeneratorWidget(QWidget* parent = nullptr);
-    ~PasswordGeneratorWidget();
+    ~PasswordGeneratorWidget() override;
 
     void loadSettings();
     void saveSettings();
@@ -53,33 +54,40 @@ public:
     void setStandaloneMode(bool standalone);
     QString getGeneratedPassword();
     bool isPasswordVisible() const;
+    bool isPasswordGenerated() const;
 
     static PasswordGeneratorWidget* popupGenerator(QWidget* parent = nullptr);
+
+signals:
+    void appliedPassword(const QString& password);
+    void closed();
 
 public slots:
     void regeneratePassword();
     void applyPassword();
     void copyPassword();
     void setPasswordVisible(bool visible);
+    void deleteWordList();
+    void addWordList();
 
-signals:
-    void appliedPassword(const QString& password);
-    void closed();
+protected:
+    void closeEvent(QCloseEvent* event) override;
 
 private slots:
     void updateButtonsEnabled(const QString& password);
-    void updatePasswordStrength(const QString& password);
+    void updatePasswordStrength();
     void setAdvancedMode(bool advanced);
     void excludeHexChars();
 
     void passwordLengthChanged(int length);
     void passphraseLengthChanged(int length);
-    void colorStrengthIndicator(const PasswordHealth& health);
 
     void updateGenerator();
 
 private:
     bool m_standalone = false;
+    bool m_passwordGenerated = false;
+    int m_firstCustomWordlistIndex;
 
     PasswordGenerator::CharClasses charClasses();
     PasswordGenerator::GeneratorFlags generatorFlags();

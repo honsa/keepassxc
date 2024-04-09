@@ -63,7 +63,7 @@ namespace Bootstrap
      * Perform early application bootstrapping that does not rely on a QApplication
      * being present.
      */
-    void bootstrap()
+    void bootstrap(const QString& uiLanguage)
     {
 #ifdef QT_NO_DEBUG
         disableCoreDumps();
@@ -72,7 +72,7 @@ namespace Bootstrap
         setupSearchPaths();
         applyEarlyQNetworkAccessManagerWorkaround();
 
-        Translator::installTranslators();
+        Translator::installTranslators(uiLanguage);
     }
 
     // LCOV_EXCL_START
@@ -89,7 +89,9 @@ namespace Bootstrap
         success = success && (setrlimit(RLIMIT_CORE, &limit) == 0);
 #endif
 
-#if defined(HAVE_PR_SET_DUMPABLE)
+// NOTE: Dumps cannot be disabled for snap builds as it prevents desktop portals from working
+//       See https://github.com/keepassxreboot/keepassxc/issues/7607#issuecomment-1109005206
+#if defined(HAVE_PR_SET_DUMPABLE) && !defined(KEEPASSXC_DIST_SNAP)
         success = success && (prctl(PR_SET_DUMPABLE, 0) == 0);
 #endif
 

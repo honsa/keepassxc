@@ -17,7 +17,7 @@
 
 #include "KdbxXmlReader.h"
 #include "KeePass2RandomStream.h"
-#include "core/DatabaseIcons.h"
+#include "core/Clock.h"
 #include "core/Endian.h"
 #include "core/Group.h"
 #include "core/Tools.h"
@@ -183,7 +183,7 @@ QString KdbxXmlReader::errorString() const
             .arg(m_xml.lineNumber())
             .arg(m_xml.columnNumber());
     }
-    return QString();
+    return {};
 }
 
 bool KdbxXmlReader::isTrueValue(const QStringRef& value)
@@ -346,7 +346,9 @@ void KdbxXmlReader::parseIcon()
     Q_ASSERT(m_xml.isStartElement() && m_xml.name() == "Icon");
 
     QUuid uuid;
-    QImage icon;
+    QByteArray iconData;
+    QString name;
+    QDateTime lastModified;
     bool uuidSet = false;
     bool iconSet = false;
 
@@ -355,8 +357,12 @@ void KdbxXmlReader::parseIcon()
             uuid = readUuid();
             uuidSet = !uuid.isNull();
         } else if (m_xml.name() == "Data") {
-            icon.loadFromData(readBinary());
+            iconData = readBinary();
             iconSet = true;
+        } else if (m_xml.name() == "Name") {
+            name = readString();
+        } else if (m_xml.name() == "LastModificationTime") {
+            lastModified = readDateTime();
         } else {
             skipCurrentElement();
         }
@@ -367,7 +373,7 @@ void KdbxXmlReader::parseIcon()
         if (m_meta->hasCustomIcon(uuid)) {
             uuid = QUuid::createUuid();
         }
-        m_meta->addCustomIcon(uuid, icon);
+        m_meta->addCustomIcon(uuid, iconData, name, lastModified);
         return;
     }
 
@@ -414,7 +420,7 @@ void KdbxXmlReader::parseCustomDataItem(CustomData* customData)
     Q_ASSERT(m_xml.isStartElement() && m_xml.name() == "Item");
 
     QString key;
-    QString value;
+    CustomData::CustomDataItem item;
     bool keySet = false;
     bool valueSet = false;
 
@@ -423,15 +429,17 @@ void KdbxXmlReader::parseCustomDataItem(CustomData* customData)
             key = readString();
             keySet = true;
         } else if (m_xml.name() == "Value") {
-            value = readString();
+            item.value = readString();
             valueSet = true;
+        } else if (m_xml.name() == "LastModificationTime") {
+            item.lastModified = readDateTime();
         } else {
             skipCurrentElement();
         }
     }
 
     if (keySet && valueSet) {
-        customData->set(key, value);
+        customData->set(key, item);
         return;
     }
 
@@ -455,8 +463,7 @@ bool KdbxXmlReader::parseRoot()
 
             Group* rootGroup = parseGroup();
             if (rootGroup) {
-                Group* oldRoot = m_db->rootGroup();
-                m_db->setRootGroup(rootGroup);
+                auto oldRoot = m_db->setRootGroup(rootGroup);
                 delete oldRoot;
                 groupParsedSuccessfully = true;
             }
@@ -502,6 +509,10 @@ Group* KdbxXmlReader::parseGroup()
             group->setNotes(readString());
             continue;
         }
+        if (m_xml.name() == "Tags") {
+            group->setTags(readString());
+            continue;
+        }
         if (m_xml.name() == "IconID") {
             int iconId = readNumber();
             if (iconId < 0) {
@@ -509,9 +520,6 @@ Group* KdbxXmlReader::parseGroup()
                     raiseError(tr("Invalid group icon number"));
                 }
                 iconId = 0;
-            } else if (iconId >= databaseIcons()->count()) {
-                qWarning("KdbxXmlReader::parseGroup: icon id \"%d\" not supported", iconId);
-                iconId = databaseIcons()->count() - 1;
             }
 
             group->setIcon(iconId);
@@ -586,6 +594,10 @@ Group* KdbxXmlReader::parseGroup()
             parseCustomData(group->customData());
             continue;
         }
+        if (m_xml.name() == "PreviousParentGroup") {
+            group->setPreviousParentGroupUuid(readUuid());
+            continue;
+        }
 
         skipCurrentElement();
     }
@@ -605,11 +617,11 @@ Group* KdbxXmlReader::parseGroup()
     }
 
     for (Group* child : asConst(children)) {
-        child->setParent(group);
+        child->setParent(group, -1, false);
     }
 
     for (Entry* entry : asConst(entries)) {
-        entry->setGroup(group);
+        entry->setGroup(group, false);
     }
 
     return group;
@@ -729,6 +741,10 @@ Entry* KdbxXmlReader::parseEntry(bool history)
             parseEntryString(entry);
             continue;
         }
+        if (m_xml.name() == "QualityCheck") {
+            entry->setExcludeFromReports(!readBool());
+            continue;
+        }
         if (m_xml.name() == "Binary") {
             QPair<QString, QString> ref = parseEntryBinary(entry);
             if (!ref.first.isEmpty() && !ref.second.isEmpty()) {
@@ -750,6 +766,17 @@ Entry* KdbxXmlReader::parseEntry(bool history)
         }
         if (m_xml.name() == "CustomData") {
             parseCustomData(entry->customData());
+
+            // Upgrade pre-KDBX-4.1 password report exclude flag
+            if (entry->customData()->contains(CustomData::ExcludeFromReportsLegacy)) {
+                entry->setExcludeFromReports(entry->customData()->value(CustomData::ExcludeFromReportsLegacy)
+                                             == TRUE_STR);
+                entry->customData()->remove(CustomData::ExcludeFromReportsLegacy);
+            }
+            continue;
+        }
+        if (m_xml.name() == "PreviousParentGroup") {
+            entry->setPreviousParentGroupUuid(readUuid());
             continue;
         }
         skipCurrentElement();
@@ -1089,13 +1116,13 @@ QUuid KdbxXmlReader::readUuid()
 {
     QByteArray uuidBin = readBinary();
     if (uuidBin.isEmpty()) {
-        return QUuid();
+        return {};
     }
     if (uuidBin.length() != UUID_LENGTH) {
         if (m_strictMode) {
             raiseError(tr("Invalid uuid value"));
         }
-        return QUuid();
+        return {};
     }
     return QUuid::fromRfc4122(uuidBin);
 }

@@ -15,7 +15,9 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <QtGlobal>
 #include <botan/mem_ops.h>
+#include <cstdlib>
 #if defined(Q_OS_MACOS)
 #include <malloc/malloc.h>
 #elif defined(Q_OS_FREEBSD)
@@ -23,7 +25,7 @@
 #elif defined(HAVE_MALLOC_H)
 #include <malloc.h>
 #else
-#include <stdlib.h>
+#include <cstdlib>
 #endif
 
 #if defined(NDEBUG) && !defined(__cpp_sized_deallocation)

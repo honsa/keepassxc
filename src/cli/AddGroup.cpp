@@ -29,9 +29,7 @@ AddGroup::AddGroup()
     positionalArguments.append({QString("group"), QObject::tr("Path of the group to add."), QString("")});
 }
 
-AddGroup::~AddGroup()
-{
-}
+AddGroup::~AddGroup() = default;
 
 int AddGroup::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<QCommandLineParser> parser)
 {
@@ -57,13 +55,13 @@ int AddGroup::executeWithDatabase(QSharedPointer<Database> database, QSharedPoin
         return EXIT_FAILURE;
     }
 
-    Group* newGroup = new Group();
+    auto newGroup = new Group();
     newGroup->setUuid(QUuid::createUuid());
     newGroup->setName(groupName);
     newGroup->setParent(parentGroup);
 
     QString errorMessage;
-    if (!database->save(&errorMessage, true, false)) {
+    if (!database->save(Database::Atomic, {}, &errorMessage)) {
         err << QObject::tr("Writing the database failed %1.").arg(errorMessage) << endl;
         return EXIT_FAILURE;
     }

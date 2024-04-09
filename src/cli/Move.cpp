@@ -30,9 +30,7 @@ Move::Move()
     positionalArguments.append({QString("group"), QObject::tr("Path of the destination group."), QString("")});
 }
 
-Move::~Move()
-{
-}
+Move::~Move() = default;
 
 int Move::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<QCommandLineParser> parser)
 {
@@ -65,7 +63,7 @@ int Move::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<
     entry->endUpdate();
 
     QString errorMessage;
-    if (!database->save(&errorMessage, true, false)) {
+    if (!database->save(Database::Atomic, {}, &errorMessage)) {
         err << QObject::tr("Writing the database failed %1.").arg(errorMessage) << endl;
         return EXIT_FAILURE;
     }

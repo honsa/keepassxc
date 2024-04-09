@@ -35,6 +35,8 @@ public:
     explicit PasswordHealth(double entropy);
     explicit PasswordHealth(const QString& pwd);
 
+    void init(double entropy);
+
     /*
      * The password score is defined to be the greater the better
      * (more secure) the password is. It doesn't have a dimension,
@@ -81,6 +83,12 @@ public:
     {
         return m_entropy;
     }
+
+    struct Length
+    {
+        static const int Short = 8;
+        static const int Long = 25;
+    };
 
 private:
     int m_score = 0;

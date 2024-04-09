@@ -17,7 +17,7 @@
 
 #include "Import.h"
 
-#include "Create.h"
+#include "DatabaseCreate.h"
 #include "Utils.h"
 
 #include <QCommandLineParser>
@@ -28,7 +28,7 @@
  * A password can be specified to encrypt the database.
  * If none is specified the function will fail.
  *
- * If the database is being saved in a non existant directory, the
+ * If the database is being saved in a non existent directory, the
  * function will fail.
  *
  * @return EXIT_SUCCESS on success, or EXIT_FAILURE on failure
@@ -40,9 +40,10 @@ Import::Import()
     description = QObject::tr("Import the contents of an XML database.");
     positionalArguments.append({QString("xml"), QObject::tr("Path of the XML database export."), QString("")});
     positionalArguments.append({QString("database"), QObject::tr("Path of the new database."), QString("")});
-    options.append(Create::SetKeyFileOption);
-    options.append(Create::SetPasswordOption);
-    options.append(Create::DecryptionTimeOption);
+    options.append(DatabaseCreate::SetKeyFileOption);
+    options.append(DatabaseCreate::SetKeyFileShortOption);
+    options.append(DatabaseCreate::SetPasswordOption);
+    options.append(DatabaseCreate::DecryptionTimeOption);
 }
 
 int Import::execute(const QStringList& arguments)
@@ -64,7 +65,7 @@ int Import::execute(const QStringList& arguments)
         return EXIT_FAILURE;
     }
 
-    QSharedPointer<Database> db = Create::initializeDatabaseFromOptions(parser);
+    QSharedPointer<Database> db = DatabaseCreate::initializeDatabaseFromOptions(parser);
     if (!db) {
         return EXIT_FAILURE;
     }
@@ -75,7 +76,7 @@ int Import::execute(const QStringList& arguments)
         return EXIT_FAILURE;
     }
 
-    if (!db->saveAs(dbPath, &errorMessage, true, false)) {
+    if (!db->saveAs(dbPath, Database::Atomic, {}, &errorMessage)) {
         err << QObject::tr("Failed to save the database: %1.").arg(errorMessage) << endl;
         return EXIT_FAILURE;
     }

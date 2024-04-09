@@ -75,9 +75,7 @@ EntryAttachmentsWidget::EntryAttachmentsWidget(QWidget* parent)
     updateButtonsEnabled();
 }
 
-EntryAttachmentsWidget::~EntryAttachmentsWidget()
-{
-}
+EntryAttachmentsWidget::~EntryAttachmentsWidget() = default;
 
 const EntryAttachments* EntryAttachmentsWidget::attachments() const
 {
@@ -152,7 +150,7 @@ void EntryAttachmentsWidget::insertAttachments()
     if (filenames.isEmpty()) {
         return;
     }
-    const auto confirmedFileNames = confirmLargeAttachments(filenames);
+    const auto confirmedFileNames = confirmAttachmentSelection(filenames);
     if (confirmedFileNames.isEmpty()) {
         return;
     }
@@ -313,6 +311,7 @@ void EntryAttachmentsWidget::updateButtonsVisible()
 {
     m_ui->addAttachmentButton->setVisible(m_buttonsVisible && !m_readOnly);
     m_ui->removeAttachmentButton->setVisible(m_buttonsVisible && !m_readOnly);
+    m_ui->renameAttachmentButton->setVisible(m_buttonsVisible && !m_readOnly);
 }
 
 bool EntryAttachmentsWidget::insertAttachments(const QStringList& filenames, QString& errorMessage)
@@ -342,28 +341,44 @@ bool EntryAttachmentsWidget::insertAttachments(const QStringList& filenames, QSt
     return errors.isEmpty();
 }
 
-QStringList EntryAttachmentsWidget::confirmLargeAttachments(const QStringList& filenames)
+QStringList EntryAttachmentsWidget::confirmAttachmentSelection(const QStringList& filenames)
 {
-    const QString confirmation(tr("%1 is a big file (%2 MB).\nYour database may get very large and reduce "
-                                  "performance.\n\nAre you sure to add this file?"));
     QStringList confirmedFileNames;
     for (const auto& file : filenames) {
-        QFileInfo fileInfo(file);
-        double size = fileInfo.size() / (1024.0 * 1024.0);
-        // Ask for confirmation before adding files over 5 MB in size
-        if (size > 5.0) {
-            auto fileName = fileInfo.fileName();
+        const QFileInfo fileInfo(file);
+        auto fileName = fileInfo.fileName();
+
+        // Ask for confirmation if overwriting an existing attachment
+        if (m_entryAttachments->hasKey(fileName)) {
             auto result = MessageBox::question(this,
-                                               tr("Confirm Attachment"),
-                                               confirmation.arg(fileName, QString::number(size, 'f', 1)),
-                                               MessageBox::Yes | MessageBox::No,
+                                               tr("Confirm Overwrite Attachment"),
+                                               tr("Attachment \"%1\" already exists. \n"
+                                                  "Would you like to overwrite the existing attachment?")
+                                                   .arg(fileName),
+                                               MessageBox::Overwrite | MessageBox::No,
                                                MessageBox::No);
-            if (result == MessageBox::Yes) {
-                confirmedFileNames << file;
+            if (result == MessageBox::No) {
+                continue;
             }
-        } else {
-            confirmedFileNames << file;
         }
+
+        // Ask for confirmation before adding files over 5 MB in size
+        double size = fileInfo.size() / (1024.0 * 1024.0);
+        if (size > 5.0) {
+            auto result =
+                MessageBox::question(this,
+                                     tr("Confirm Attachment"),
+                                     tr("%1 is a big file (%2 MB).\nYour database may get very large and reduce "
+                                        "performance.\n\nAre you sure to add this file?")
+                                         .arg(fileName, QString::number(size, 'f', 1)),
+                                     MessageBox::Yes | MessageBox::No,
+                                     MessageBox::No);
+            if (result == MessageBox::No) {
+                continue;
+            }
+        }
+
+        confirmedFileNames << file;
     }
 
     return confirmedFileNames;
@@ -374,14 +389,14 @@ bool EntryAttachmentsWidget::eventFilter(QObject* watched, QEvent* e)
     if (watched == m_ui->attachmentsView->viewport() && !isReadOnly()) {
         const QEvent::Type eventType = e->type();
         if (eventType == QEvent::DragEnter || eventType == QEvent::DragMove) {
-            QDropEvent* dropEv = static_cast<QDropEvent*>(e);
+            auto dropEv = static_cast<QDropEvent*>(e);
             const QMimeData* mimeData = dropEv->mimeData();
             if (mimeData->hasUrls()) {
                 dropEv->acceptProposedAction();
                 return true;
             }
         } else if (eventType == QEvent::Drop) {
-            QDropEvent* dropEv = static_cast<QDropEvent*>(e);
+            auto dropEv = static_cast<QDropEvent*>(e);
             const QMimeData* mimeData = dropEv->mimeData();
             if (mimeData->hasUrls()) {
                 dropEv->acceptProposedAction();

@@ -24,9 +24,14 @@
 #include "format/KeePass2.h"
 #include "format/KeePass2Reader.h"
 #include "format/KeePass2Writer.h"
+#ifdef WITH_XC_KEESHARE
+#include "keeshare/KeeShare.h"
+#include "keeshare/KeeShareSettings.h"
+#endif
 #include "keys/FileKey.h"
 #include "keys/PasswordKey.h"
 #include "mock/MockChallengeResponseKey.h"
+#include "mock/MockClock.h"
 #include <QTest>
 
 int main(int argc, char* argv[])
@@ -37,7 +42,9 @@ int main(int argc, char* argv[])
 
     TestKdbx4Argon2 argon2Test;
     TestKdbx4AesKdf aesKdfTest;
-    return QTest::qExec(&argon2Test, argc, argv) | QTest::qExec(&aesKdfTest, argc, argv);
+    TestKdbx4Format kdbx4Test;
+    return QTest::qExec(&argon2Test, argc, argv) || QTest::qExec(&aesKdfTest, argc, argv)
+           || QTest::qExec(&kdbx4Test, argc, argv);
 }
 
 void TestKdbx4Argon2::initTestCaseImpl()
@@ -69,7 +76,7 @@ QSharedPointer<Database> TestKdbx4Argon2::readXml(QBuffer* buf, bool strictMode,
 
 void TestKdbx4Argon2::writeXml(QBuffer* buf, Database* db, bool& hasError, QString& errorString)
 {
-    KdbxXmlWriter writer(KeePass2::FILE_VERSION_4);
+    KdbxXmlWriter writer(KeePass2::FILE_VERSION_4, {});
     writer.writeDatabase(buf, db);
     hasError = writer.hasError();
     errorString = writer.errorString();
@@ -83,21 +90,6 @@ void TestKdbx4Argon2::readKdbx(QIODevice* device,
 {
     KeePass2Reader reader;
     reader.readDatabase(device, key, db.data());
-    hasError = reader.hasError();
-    if (hasError) {
-        errorString = reader.errorString();
-    }
-    QCOMPARE(reader.version(), KeePass2::FILE_VERSION_4);
-}
-
-void TestKdbx4Argon2::readKdbx(const QString& path,
-                               QSharedPointer<const CompositeKey> key,
-                               QSharedPointer<Database> db,
-                               bool& hasError,
-                               QString& errorString)
-{
-    KeePass2Reader reader;
-    reader.readDatabase(path, key, db.data());
     hasError = reader.hasError();
     if (hasError) {
         errorString = reader.errorString();
@@ -119,8 +111,25 @@ void TestKdbx4Argon2::writeKdbx(QIODevice* device, Database* db, bool& hasError,
     QCOMPARE(writer.version(), KeePass2::FILE_VERSION_4);
 }
 
+void TestKdbx4AesKdf::initTestCaseImpl()
+{
+    m_xmlDb->changeKdf(fastKdf(KeePass2::uuidToKdf(KeePass2::KDF_AES_KDBX4)));
+    m_kdbxSourceDb->changeKdf(fastKdf(KeePass2::uuidToKdf(KeePass2::KDF_AES_KDBX4)));
+}
+
 Q_DECLARE_METATYPE(QUuid)
-void TestKdbx4Argon2::testFormat400()
+
+void TestKdbx4Format::init()
+{
+    MockClock::setup(new MockClock());
+}
+
+void TestKdbx4Format::cleanup()
+{
+    MockClock::teardown();
+}
+
+void TestKdbx4Format::testFormat400()
 {
     QString filename = QString(KEEPASSX_TEST_DATA_DIR).append("/Format400.kdbx");
     auto key = QSharedPointer<CompositeKey>::create();
@@ -145,7 +154,7 @@ void TestKdbx4Argon2::testFormat400()
     QCOMPARE(entry->attachments()->value("Format400"), QByteArray("Format400\n"));
 }
 
-void TestKdbx4Argon2::testFormat400Upgrade()
+void TestKdbx4Format::testFormat400Upgrade()
 {
     QFETCH(QUuid, kdfUuid);
     QFETCH(QUuid, cipherUuid);
@@ -203,15 +212,15 @@ void TestKdbx4Argon2::testFormat400Upgrade()
 }
 
 // clang-format off
-void TestKdbx4Argon2::testFormat400Upgrade_data()
+void TestKdbx4Format::testFormat400Upgrade_data()
 {
     QTest::addColumn<QUuid>("kdfUuid");
     QTest::addColumn<QUuid>("cipherUuid");
     QTest::addColumn<bool>("addCustomData");
     QTest::addColumn<quint32>("expectedVersion");
 
-    auto constexpr kdbx3 = KeePass2::FILE_VERSION_3_1 & KeePass2::FILE_VERSION_CRITICAL_MASK;
-    auto constexpr kdbx4 = KeePass2::FILE_VERSION_4   & KeePass2::FILE_VERSION_CRITICAL_MASK;
+    auto constexpr kdbx3 = KeePass2::FILE_VERSION_3_1;
+    auto constexpr kdbx4 = KeePass2::FILE_VERSION_4;
 
     QTest::newRow("Argon2d          + AES")                  << KeePass2::KDF_ARGON2D   << KeePass2::CIPHER_AES256  << false << kdbx4;
     QTest::newRow("Argon2id         + AES")                  << KeePass2::KDF_ARGON2ID  << KeePass2::CIPHER_AES256  << false << kdbx4;
@@ -242,7 +251,69 @@ void TestKdbx4Argon2::testFormat400Upgrade_data()
 }
 // clang-format on
 
-void TestKdbx4Argon2::testUpgradeMasterKeyIntegrity()
+void TestKdbx4Format::testFormat410Upgrade()
+{
+    Database db;
+    db.changeKdf(fastKdf(db.kdf()));
+    QCOMPARE(db.kdf()->uuid(), KeePass2::KDF_AES_KDBX3);
+    QCOMPARE(KeePass2Writer::kdbxVersionRequired(&db), KeePass2::FILE_VERSION_3_1);
+
+    auto group1 = new Group();
+    group1->setUuid(QUuid::createUuid());
+    group1->setParent(db.rootGroup());
+
+    auto group2 = new Group();
+    group2->setUuid(QUuid::createUuid());
+    group2->setParent(db.rootGroup());
+
+    auto entry = new Entry();
+    entry->setUuid(QUuid::createUuid());
+    entry->setGroup(group1);
+
+    // Groups with tags
+    group1->setTags("tag");
+    QCOMPARE(KeePass2Writer::kdbxVersionRequired(&db), KeePass2::FILE_VERSION_4_1);
+    group1->setTags("");
+    QCOMPARE(KeePass2Writer::kdbxVersionRequired(&db), KeePass2::FILE_VERSION_3_1);
+
+    // PasswordQuality flag set
+    entry->setExcludeFromReports(true);
+    QCOMPARE(KeePass2Writer::kdbxVersionRequired(&db), KeePass2::FILE_VERSION_4_1);
+    entry->setExcludeFromReports(false);
+    QCOMPARE(KeePass2Writer::kdbxVersionRequired(&db), KeePass2::FILE_VERSION_3_1);
+
+    // Previous parent group set on group
+    group1->setPreviousParentGroup(group2);
+    QCOMPARE(group1->previousParentGroup(), group2);
+    QCOMPARE(KeePass2Writer::kdbxVersionRequired(&db), KeePass2::FILE_VERSION_4_1);
+    group1->setPreviousParentGroup(nullptr);
+    QCOMPARE(KeePass2Writer::kdbxVersionRequired(&db), KeePass2::FILE_VERSION_3_1);
+
+    // Previous parent group set on entry
+    entry->setPreviousParentGroup(group2);
+    QCOMPARE(entry->previousParentGroup(), group2);
+    QCOMPARE(KeePass2Writer::kdbxVersionRequired(&db), KeePass2::FILE_VERSION_4_1);
+    entry->setPreviousParentGroup(nullptr);
+    QCOMPARE(KeePass2Writer::kdbxVersionRequired(&db), KeePass2::FILE_VERSION_3_1);
+
+    // Custom icons with name or modification date
+    Metadata::CustomIconData customIcon;
+    auto iconUuid = QUuid::createUuid();
+    db.metadata()->addCustomIcon(iconUuid, customIcon);
+    QCOMPARE(KeePass2Writer::kdbxVersionRequired(&db), KeePass2::FILE_VERSION_3_1);
+    customIcon.name = "abc";
+    db.metadata()->removeCustomIcon(iconUuid);
+    db.metadata()->addCustomIcon(iconUuid, customIcon);
+    QCOMPARE(KeePass2Writer::kdbxVersionRequired(&db), KeePass2::FILE_VERSION_4_1);
+    customIcon.name.clear();
+    customIcon.lastModified = Clock::currentDateTimeUtc();
+    db.metadata()->removeCustomIcon(iconUuid);
+    QCOMPARE(KeePass2Writer::kdbxVersionRequired(&db), KeePass2::FILE_VERSION_3_1);
+    db.metadata()->addCustomIcon(iconUuid, customIcon);
+    QCOMPARE(KeePass2Writer::kdbxVersionRequired(&db), KeePass2::FILE_VERSION_4_1);
+}
+
+void TestKdbx4Format::testUpgradeMasterKeyIntegrity()
 {
     QFETCH(QString, upgradeAction);
     QFETCH(quint32, expectedVersion);
@@ -325,20 +396,20 @@ void TestKdbx4Argon2::testUpgradeMasterKeyIntegrity()
     if (reader.hasError()) {
         QFAIL(qPrintable(reader.errorString()));
     }
-    QCOMPARE(reader.version(), expectedVersion & KeePass2::FILE_VERSION_CRITICAL_MASK);
-    if (expectedVersion != KeePass2::FILE_VERSION_3) {
+    QCOMPARE(reader.version(), expectedVersion);
+    if (expectedVersion >= KeePass2::FILE_VERSION_4) {
         QVERIFY(db2->kdf()->uuid() != KeePass2::KDF_AES_KDBX3);
     }
 }
 
-void TestKdbx4Argon2::testUpgradeMasterKeyIntegrity_data()
+void TestKdbx4Format::testUpgradeMasterKeyIntegrity_data()
 {
     QTest::addColumn<QString>("upgradeAction");
     QTest::addColumn<quint32>("expectedVersion");
 
-    QTest::newRow("Upgrade: none") << QString("none") << KeePass2::FILE_VERSION_3;
-    QTest::newRow("Upgrade: none (meta-customdata)") << QString("meta-customdata") << KeePass2::FILE_VERSION_3;
-    QTest::newRow("Upgrade: none (explicit kdf-aes-kdbx3)") << QString("kdf-aes-kdbx3") << KeePass2::FILE_VERSION_3;
+    QTest::newRow("Upgrade: none") << QString("none") << KeePass2::FILE_VERSION_3_1;
+    QTest::newRow("Upgrade: none (meta-customdata)") << QString("meta-customdata") << KeePass2::FILE_VERSION_3_1;
+    QTest::newRow("Upgrade: none (explicit kdf-aes-kdbx3)") << QString("kdf-aes-kdbx3") << KeePass2::FILE_VERSION_3_1;
     QTest::newRow("Upgrade (explicit): kdf-argon2") << QString("kdf-argon2") << KeePass2::FILE_VERSION_4;
     QTest::newRow("Upgrade (explicit): kdf-aes-kdbx4") << QString("kdf-aes-kdbx4") << KeePass2::FILE_VERSION_4;
     QTest::newRow("Upgrade (implicit): public-customdata") << QString("public-customdata") << KeePass2::FILE_VERSION_4;
@@ -350,7 +421,108 @@ void TestKdbx4Argon2::testUpgradeMasterKeyIntegrity_data()
     QTest::newRow("Upgrade (implicit): entry-customdata") << QString("entry-customdata") << KeePass2::FILE_VERSION_4;
 }
 
-void TestKdbx4Argon2::testCustomData()
+void TestKdbx4Format::testAttachmentIndexStability()
+{
+    QScopedPointer<Database> db(new Database());
+    db->changeKdf(fastKdf(KeePass2::uuidToKdf(KeePass2::KDF_ARGON2ID)));
+    auto compositeKey = QSharedPointer<CompositeKey>::create();
+    db->setKey(compositeKey);
+    QVERIFY(!db->uuid().isNull());
+
+    auto root = db->rootGroup();
+
+    auto group1 = new Group();
+    group1->setUuid(QUuid::createUuid());
+    QVERIFY(!group1->uuid().isNull());
+    group1->setParent(root);
+
+    // Simulate KeeShare group, which uses its own attachment namespace
+    auto group2 = new Group();
+    group2->setUuid(QUuid::createUuid());
+    QVERIFY(!group2->uuid().isNull());
+    group2->setParent(group1);
+#ifdef WITH_XC_KEESHARE
+    KeeShareSettings::Reference ref;
+    ref.type = KeeShareSettings::SynchronizeWith;
+    ref.path = "123";
+    KeeShare::setReferenceTo(group2, ref);
+    QVERIFY(KeeShare::isShared(group2));
+#endif
+
+    auto attachment1 = QByteArray("qwerty");
+    auto attachment2 = QByteArray("asdf");
+    auto attachment3 = QByteArray("zxcv");
+
+    auto entry1 = new Entry();
+    entry1->setUuid(QUuid::createUuid());
+    QVERIFY(!entry1->uuid().isNull());
+    auto uuid1 = entry1->uuid();
+    entry1->attachments()->set("a", attachment1);
+    QCOMPARE(entry1->attachments()->keys().size(), 1);
+    QCOMPARE(entry1->attachments()->values().size(), 1);
+    entry1->setGroup(root);
+
+    auto entry2 = new Entry();
+    entry2->setUuid(QUuid::createUuid());
+    QVERIFY(!entry2->uuid().isNull());
+    auto uuid2 = entry2->uuid();
+    entry2->attachments()->set("a", attachment1);
+    entry2->attachments()->set("b", attachment2);
+    QCOMPARE(entry2->attachments()->keys().size(), 2);
+    QCOMPARE(entry2->attachments()->values().size(), 2);
+    entry2->setGroup(group1);
+
+    auto entry3 = new Entry();
+    entry3->setUuid(QUuid::createUuid());
+    QVERIFY(!entry3->uuid().isNull());
+    auto uuid3 = entry3->uuid();
+    entry3->attachments()->set("a", attachment1);
+    entry3->attachments()->set("b", attachment2);
+    entry3->attachments()->set("x", attachment3);
+    entry3->attachments()->set("y", attachment3);
+    QCOMPARE(entry3->attachments()->keys().size(), 4);
+    QCOMPARE(entry3->attachments()->values().size(), 3);
+    entry3->setGroup(group2);
+
+    QBuffer buffer;
+    buffer.open(QBuffer::ReadWrite);
+    KeePass2Writer writer;
+    QVERIFY(writer.writeDatabase(&buffer, db.data()));
+    QVERIFY(writer.version() >= KeePass2::FILE_VERSION_4);
+
+    buffer.seek(0);
+    KeePass2Reader reader;
+
+    // Re-read database and check that all attachments are still correctly assigned
+    auto db2 = QSharedPointer<Database>::create();
+    reader.readDatabase(&buffer, QSharedPointer<CompositeKey>::create(), db2.data());
+    QVERIFY(!reader.hasError());
+    QVERIFY(!db->uuid().isNull());
+
+    auto a1 = db2->rootGroup()->findEntryByUuid(uuid1)->attachments();
+    QCOMPARE(a1->keys().size(), 1);
+    QCOMPARE(a1->values().size(), 1);
+    QCOMPARE(a1->value("a"), attachment1);
+
+    auto a2 = db2->rootGroup()->findEntryByUuid(uuid2)->attachments();
+    QCOMPARE(a2->keys().size(), 2);
+    QCOMPARE(a2->values().size(), 2);
+    QCOMPARE(a2->value("a"), attachment1);
+    QCOMPARE(a2->value("b"), attachment2);
+
+#ifdef WITH_XC_KEESHARE
+    QVERIFY(KeeShare::isShared(db2->rootGroup()->findEntryByUuid(uuid3)->group()));
+#endif
+    auto a3 = db2->rootGroup()->findEntryByUuid(uuid3)->attachments();
+    QCOMPARE(a3->keys().size(), 4);
+    QCOMPARE(a3->values().size(), 3);
+    QCOMPARE(a3->value("a"), attachment1);
+    QCOMPARE(a3->value("b"), attachment2);
+    QCOMPARE(a3->value("x"), attachment3);
+    QCOMPARE(a3->value("y"), attachment3);
+}
+
+void TestKdbx4Format::testCustomData()
 {
     Database db;
 
@@ -373,7 +545,7 @@ void TestKdbx4Argon2::testCustomData()
     db.metadata()->customData()->set(customDataKey1, customData1);
     db.metadata()->customData()->set(customDataKey2, customData2);
     auto lastModified = db.metadata()->customData()->value(CustomData::LastModified);
-    const int dataSize = customDataKey1.toUtf8().size() + customDataKey1.toUtf8().size() + customData1.toUtf8().size()
+    const int dataSize = customDataKey1.toUtf8().size() + customDataKey2.toUtf8().size() + customData1.toUtf8().size()
                          + customData2.toUtf8().size() + lastModified.toUtf8().size()
                          + CustomData::LastModified.toUtf8().size();
     QCOMPARE(db.metadata()->customData()->size(), 3);
@@ -442,10 +614,4 @@ void TestKdbx4Argon2::testCustomData()
     auto* newEntry = newDb->rootGroup()->children()[0]->entries()[0];
     QCOMPARE(newEntry->customData()->value(customDataKey1), customData1);
     QCOMPARE(newEntry->customData()->value(customDataKey2), customData2);
-}
-
-void TestKdbx4AesKdf::initTestCaseImpl()
-{
-    m_xmlDb->changeKdf(fastKdf(KeePass2::uuidToKdf(KeePass2::KDF_AES_KDBX4)));
-    m_kdbxSourceDb->changeKdf(fastKdf(KeePass2::uuidToKdf(KeePass2::KDF_AES_KDBX4)));
 }

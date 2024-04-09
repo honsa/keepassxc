@@ -1,6 +1,6 @@
 /*
  *  Copyright (C) 2010 Felix Geyer <debfx@fobos.de>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2021 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 #define KEEPASSX_EDITENTRYWIDGET_H
 
 #include <QButtonGroup>
+#include <QCheckBox>
 #include <QCompleter>
 #include <QPointer>
 #include <QTimer>
@@ -117,11 +118,13 @@ private slots:
     void updateSSHAgentAttachment();
     void updateSSHAgentAttachments();
     void updateSSHAgentKeyInfo();
+    void updateTotp();
     void browsePrivateKey();
     void addKeyToAgent();
     void removeKeyFromAgent();
     void decryptPrivateKey();
     void copyPublicKey();
+    void generatePrivateKey();
 #endif
 #ifdef WITH_XC_BROWSER
     void updateBrowserModified();
@@ -130,6 +133,7 @@ private slots:
     void removeCurrentURL();
     void editCurrentURL();
     void updateCurrentURL();
+    void entryURLEdited(const QString& url);
 #endif
 
 private:
@@ -148,10 +152,10 @@ private:
     void setupEntryUpdate();
     void setupColorButton(bool foreground, const QColor& color);
 
-    bool passwordsEqual();
     void setForms(Entry* entry, bool restore = false);
     QMenu* createPresetsMenu();
     void updateEntryData(Entry* entry) const;
+    void updateBrowserIntegrationCheckbox(QCheckBox* checkBox, bool enabled, bool value, const QString& option);
 #ifdef WITH_XC_SSHAGENT
     bool getOpenSSHKey(OpenSSHKey& key, bool decrypt = false);
 #endif
@@ -165,6 +169,7 @@ private:
     bool m_history;
 #ifdef WITH_XC_SSHAGENT
     KeeAgentSettings m_sshAgentSettings;
+    QString m_pendingPrivateKey;
 #endif
     const QScopedPointer<Ui::EditEntryWidgetMain> m_mainUi;
     const QScopedPointer<Ui::EditEntryWidgetAdvanced> m_advancedUi;

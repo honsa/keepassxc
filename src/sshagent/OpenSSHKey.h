@@ -41,11 +41,13 @@ public:
     const QString fingerprint(QCryptographicHash::Algorithm algo = QCryptographicHash::Sha256) const;
     const QString comment() const;
     const QString publicKey() const;
+    const QString privateKey();
     const QString errorString() const;
 
     void setType(const QString& type);
-    void setPublicData(const QList<QByteArray>& data);
-    void setPrivateData(const QList<QByteArray>& data);
+    void setCheck(quint32 check);
+    void setPublicData(const QByteArray& data);
+    void setPrivateData(const QByteArray& data);
     void setComment(const QString& comment);
 
     void clearPrivate();
@@ -58,10 +60,19 @@ public:
     static const QString TYPE_DSA_PRIVATE;
     static const QString TYPE_RSA_PRIVATE;
     static const QString TYPE_OPENSSH_PRIVATE;
+    static const QString OPENSSH_CIPHER_SUFFIX;
 
 private:
+    enum KeyPart
+    {
+        STR_PART,
+        UINT8_PART
+    };
+    bool readKeyParts(BinaryStream& in, const QList<KeyPart> parts, BinaryStream& out);
+
     bool extractPEM(const QByteArray& in, QByteArray& out);
 
+    quint32 m_check;
     QString m_type;
     QString m_cipherName;
     QByteArray m_cipherIV;
@@ -70,8 +81,8 @@ private:
 
     QString m_rawType;
     QByteArray m_rawData;
-    QList<QByteArray> m_rawPublicData;
-    QList<QByteArray> m_rawPrivateData;
+    QByteArray m_rawPublicData;
+    QByteArray m_rawPrivateData;
     QString m_comment;
     QString m_error;
 };

@@ -18,6 +18,8 @@
 #ifndef KEEPASSX_CLONEDIALOG_H
 #define KEEPASSX_CLONEDIALOG_H
 
+#include <QDialog>
+
 #include "core/Database.h"
 #include "gui/DatabaseWidget.h"
 
@@ -32,7 +34,10 @@ class CloneDialog : public QDialog
 
 public:
     explicit CloneDialog(DatabaseWidget* parent = nullptr, Database* db = nullptr, Entry* entry = nullptr);
-    ~CloneDialog();
+    ~CloneDialog() override;
+
+signals:
+    void entryCloned(Entry* clone);
 
 private:
     QScopedPointer<Ui::CloneDialog> m_ui;

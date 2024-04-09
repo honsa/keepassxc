@@ -17,6 +17,7 @@
  */
 
 #include <QCommandLineParser>
+#include <QDir>
 #include <QFile>
 #include <QWindow>
 
@@ -41,6 +42,10 @@ Q_IMPORT_PLUGIN(QWindowsIntegrationPlugin)
 #elif defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
 Q_IMPORT_PLUGIN(QXcbIntegrationPlugin)
 #endif
+#endif
+
+#ifdef Q_OS_WIN
+#include <windows.h>
 #endif
 
 int main(int argc, char** argv)
@@ -73,7 +78,7 @@ int main(int argc, char** argv)
     QCommandLineOption keyfileOption("keyfile", QObject::tr("key file of the database"), "keyfile");
     QCommandLineOption pwstdinOption("pw-stdin", QObject::tr("read password of the database from stdin"));
     QCommandLineOption allowScreenCaptureOption("allow-screencapture",
-                                                QObject::tr("allow app screen recordering and screenshots"));
+                                                QObject::tr("allow screenshots and app recording (Windows/macOS)"));
 
     QCommandLineOption helpOption = parser.addHelpOption();
     QCommandLineOption versionOption = parser.addVersionOption();
@@ -84,10 +89,7 @@ int main(int argc, char** argv)
     parser.addOption(keyfileOption);
     parser.addOption(pwstdinOption);
     parser.addOption(debugInfoOption);
-
-    if (osUtils->canPreventScreenCapture()) {
-        parser.addOption(allowScreenCaptureOption);
-    }
+    parser.addOption(allowScreenCaptureOption);
 
     parser.process(app);
 
@@ -109,9 +111,30 @@ int main(int argc, char** argv)
         Config::createConfigFromFile(parser.value(configOption), parser.value(localConfigOption));
     }
 
+    // Extract file names provided on the command line for opening
+    QStringList fileNames;
+#ifdef Q_OS_WIN
+    // Get correct case for Windows filenames (fixes #7139)
+    for (const auto& file : parser.positionalArguments()) {
+        const auto fileInfo = QFileInfo(file);
+        WIN32_FIND_DATAW findFileData;
+        HANDLE hFind;
+        const wchar_t* absolutePathWchar = reinterpret_cast<const wchar_t*>(fileInfo.absoluteFilePath().utf16());
+        hFind = FindFirstFileW(absolutePathWchar, &findFileData);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            fileNames << QString("%1/%2").arg(fileInfo.absolutePath(), QString::fromWCharArray(findFileData.cFileName));
+            FindClose(hFind);
+        }
+    }
+#else
+    for (const auto& file : parser.positionalArguments()) {
+        if (QFile::exists(file)) {
+            fileNames << QDir::toNativeSeparators(file);
+        }
+    }
+#endif
+
     // Process single instance and early exit if already running
-    // FIXME: this is a *mess* and it is entirely my fault. --wundrweapon
-    const QStringList fileNames = parser.positionalArguments();
     if (app.isAlreadyRunning()) {
         if (parser.isSet(lockOption)) {
             if (app.sendLockToInstance()) {
@@ -130,6 +153,14 @@ int main(int argc, char** argv)
         return EXIT_SUCCESS;
     }
 
+    if (parser.isSet(lockOption)) {
+        qWarning() << QObject::tr("KeePassXC is not running. No open database to lock").toUtf8().constData();
+
+        // still return with EXIT_SUCCESS because when used within a script for ensuring that there is no unlocked
+        // keepass database (e.g. screen locking) we can consider it as successful
+        return EXIT_SUCCESS;
+    }
+
     if (!Crypto::init()) {
         QString error = QObject::tr("Fatal error while testing the cryptographic functions.");
         error.append("\n");
@@ -145,27 +176,22 @@ int main(int argc, char** argv)
     QGuiApplication::setDesktopFileName(app.property("KPXC_QUALIFIED_APPNAME").toString() + QStringLiteral(".desktop"));
 #endif
 
-    Application::bootstrap();
+    Application::bootstrap(config()->get(Config::GUI_Language).toString());
 
     MainWindow mainWindow;
-
-#ifndef QT_DEBUG
-    // Disable screen capture if capable and not explicitly allowed
-    if (osUtils->canPreventScreenCapture() && !parser.isSet(allowScreenCaptureOption)) {
-        // This ensures any top-level windows (Main Window, Modal Dialogs, etc.) are excluded from screenshots
-        QObject::connect(&app, &QGuiApplication::focusWindowChanged, &mainWindow, [&](QWindow* window) {
-            if (window) {
-                if (!osUtils->setPreventScreenCapture(window, true)) {
-                    mainWindow.displayGlobalMessage(
-                        QObject::tr("Warning: Failed to prevent screenshots on a top level window!"),
-                        MessageWidget::Error);
-                }
-            }
-        });
-    }
+#ifdef Q_OS_WIN
+    // Qt Hack - Prevent white flicker when showing window
+    mainWindow.setProperty("windowOpacity", 0.0);
 #endif
 
+    // Disable screen capture if not explicitly allowed
+    // This ensures any top-level windows (Main Window, Modal Dialogs, etc.) are excluded from screenshots
+    mainWindow.setAllowScreenCapture(parser.isSet(allowScreenCaptureOption));
+
     const bool pwstdin = parser.isSet(pwstdinOption);
+    if (!fileNames.isEmpty() && pwstdin) {
+        Utils::setDefaultTextStreams();
+    }
     for (const QString& filename : fileNames) {
         QString password;
         if (pwstdin) {
@@ -173,13 +199,17 @@ int main(int argc, char** argv)
             // buffer for native messaging, even if the specified file does not exist
             QTextStream out(stdout, QIODevice::WriteOnly);
             out << QObject::tr("Database password: ") << flush;
-            Utils::setDefaultTextStreams();
             password = Utils::getPassword();
         }
+        mainWindow.openDatabase(filename, password, parser.value(keyfileOption));
+    }
 
-        if (!filename.isEmpty() && QFile::exists(filename) && !filename.endsWith(".json", Qt::CaseInsensitive)) {
-            mainWindow.openDatabase(filename, password, parser.value(keyfileOption));
-        }
+    // start minimized if configured
+    if (config()->get(Config::GUI_MinimizeOnStartup).toBool()) {
+        mainWindow.hideWindow();
+    } else {
+        mainWindow.bringToFront();
+        Application::processEvents();
     }
 
     int exitCode = Application::exec();

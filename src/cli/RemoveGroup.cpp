@@ -30,9 +30,7 @@ RemoveGroup::RemoveGroup()
     positionalArguments.append({QString("group"), QObject::tr("Path of the group to remove."), QString("")});
 }
 
-RemoveGroup::~RemoveGroup()
-{
-}
+RemoveGroup::~RemoveGroup() = default;
 
 int RemoveGroup::executeWithDatabase(QSharedPointer<Database> database, QSharedPointer<QCommandLineParser> parser)
 {
@@ -63,7 +61,7 @@ int RemoveGroup::executeWithDatabase(QSharedPointer<Database> database, QSharedP
     };
 
     QString errorMessage;
-    if (!database->save(&errorMessage, true, false)) {
+    if (!database->save(Database::Atomic, {}, &errorMessage)) {
         err << QObject::tr("Unable to save database to file: %1").arg(errorMessage) << endl;
         return EXIT_FAILURE;
     }

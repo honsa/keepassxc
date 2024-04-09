@@ -38,17 +38,17 @@ public:
 
         static Result Ok()
         {
-            return Result(true, false, QString());
+            return {true, false, QString()};
         }
 
         static Result Retry(const QString& error)
         {
-            return Result(false, true, error);
+            return {false, true, error};
         }
 
         static Result Failed(const QString& error)
         {
-            return Result(false, false, error);
+            return {false, false, error};
         }
 
         bool isOk() const
@@ -121,13 +121,29 @@ public:
 class KEEPASSXC_EXPORT AutoTypeExecutor
 {
 public:
+    enum class Mode
+    {
+        NORMAL,
+        VIRTUAL
+    };
+
     virtual ~AutoTypeExecutor() = default;
     virtual AutoTypeAction::Result execBegin(const AutoTypeBegin* action) = 0;
     virtual AutoTypeAction::Result execType(const AutoTypeKey* action) = 0;
     virtual AutoTypeAction::Result execClearField(const AutoTypeClearField* action) = 0;
 
     int execDelayMs = 25;
+    Mode mode = Mode::NORMAL;
     QString error;
+};
+
+class KEEPASSXC_EXPORT AutoTypeMode : public AutoTypeAction
+{
+public:
+    AutoTypeMode(AutoTypeExecutor::Mode mode = AutoTypeExecutor::Mode::NORMAL);
+    Result exec(AutoTypeExecutor* executor) const override;
+
+    const AutoTypeExecutor::Mode mode;
 };
 
 #endif // KEEPASSX_AUTOTYPEACTION_H

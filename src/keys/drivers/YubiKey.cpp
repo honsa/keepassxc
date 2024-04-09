@@ -1,6 +1,6 @@
 /*
  *  Copyright (C) 2014 Kyle Manna <kyle@kylemanna.com>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2017-2021 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -17,97 +17,45 @@
  */
 
 #include "YubiKey.h"
+#include "YubiKeyInterfacePCSC.h"
+#include "YubiKeyInterfaceUSB.h"
 
-#include "core/Tools.h"
-#include "crypto/Random.h"
-
-#include "thirdparty/ykcore/ykcore.h"
-#include "thirdparty/ykcore/ykdef.h"
-#include "thirdparty/ykcore/ykstatus.h"
-
+#include <QMutexLocker>
+#include <QSet>
 #include <QtConcurrent>
 
-namespace
-{
-    constexpr int MAX_KEYS = 4;
-
-    YK_KEY* openKey(int index)
-    {
-        static const int vids[] = {YUBICO_VID, ONLYKEY_VID};
-        static const int pids[] = {YUBIKEY_PID,
-                                   NEO_OTP_PID,
-                                   NEO_OTP_CCID_PID,
-                                   NEO_OTP_U2F_PID,
-                                   NEO_OTP_U2F_CCID_PID,
-                                   YK4_OTP_PID,
-                                   YK4_OTP_U2F_PID,
-                                   YK4_OTP_CCID_PID,
-                                   YK4_OTP_U2F_CCID_PID,
-                                   PLUS_U2F_OTP_PID,
-                                   ONLYKEY_PID};
-
-        return yk_open_key_vid_pid(vids, sizeof(vids) / sizeof(vids[0]), pids, sizeof(pids) / sizeof(pids[0]), index);
-    }
-
-    void closeKey(YK_KEY* key)
-    {
-        yk_close_key(key);
-    }
-
-    unsigned int getSerial(YK_KEY* key)
-    {
-        unsigned int serial;
-        yk_get_serial(key, 1, 0, &serial);
-        return serial;
-    }
-
-    YK_KEY* openKeySerial(unsigned int serial)
-    {
-        for (int i = 0; i < MAX_KEYS; ++i) {
-            auto* yk_key = openKey(i);
-            if (yk_key) {
-                // If the provided serial number is 0, or the key matches the serial, return it
-                if (serial == 0 || getSerial(yk_key) == serial) {
-                    return yk_key;
-                }
-                closeKey(yk_key);
-            } else if (yk_errno == YK_ENOKEY) {
-                // No more connected keys
-                break;
-            } else if (yk_errno == YK_EUSBERR) {
-                qWarning("Hardware key USB error: %s", yk_usb_strerror());
-            } else {
-                qWarning("Hardware key error: %s", yk_strerror(yk_errno));
-            }
-        }
-        return nullptr;
-    }
-} // namespace
+QMutex YubiKey::s_interfaceMutex(QMutex::Recursive);
 
 YubiKey::YubiKey()
-    : m_mutex(QMutex::Recursive)
 {
-    m_interactionTimer.setSingleShot(true);
-    m_interactionTimer.setInterval(300);
+    int num_interfaces = 0;
 
-    if (!yk_init()) {
-        qDebug("YubiKey: Failed to initialize USB interface.");
+    if (YubiKeyInterfaceUSB::instance()->isInitialized()) {
+        ++num_interfaces;
+        connect(YubiKeyInterfaceUSB::instance(), SIGNAL(challengeStarted()), this, SIGNAL(challengeStarted()));
+        connect(YubiKeyInterfaceUSB::instance(), SIGNAL(challengeCompleted()), this, SIGNAL(challengeCompleted()));
     } else {
-        m_initialized = true;
-        // clang-format off
-        connect(&m_interactionTimer, SIGNAL(timeout()), this, SIGNAL(userInteractionRequest()));
-        connect(this, &YubiKey::challengeStarted, this, [this] { m_interactionTimer.start(); }, Qt::QueuedConnection);
-        connect(this, &YubiKey::challengeCompleted, this, [this] { m_interactionTimer.stop(); }, Qt::QueuedConnection);
-        // clang-format on
+        qDebug("YubiKey: USB interface is not initialized.");
     }
+
+    if (YubiKeyInterfacePCSC::instance()->isInitialized()) {
+        ++num_interfaces;
+        connect(YubiKeyInterfacePCSC::instance(), SIGNAL(challengeStarted()), this, SIGNAL(challengeStarted()));
+        connect(YubiKeyInterfacePCSC::instance(), SIGNAL(challengeCompleted()), this, SIGNAL(challengeCompleted()));
+    } else {
+        qDebug("YubiKey: PCSC interface is disabled or not initialized.");
+    }
+
+    m_initialized = num_interfaces > 0;
+
+    m_interactionTimer.setSingleShot(true);
+    m_interactionTimer.setInterval(200);
+    connect(&m_interactionTimer, SIGNAL(timeout()), this, SIGNAL(userInteractionRequest()));
+    connect(this, &YubiKey::challengeStarted, this, [this] { m_interactionTimer.start(); });
+    connect(this, &YubiKey::challengeCompleted, this, [this] { m_interactionTimer.stop(); });
 }
 
-YubiKey::~YubiKey()
-{
-    yk_release();
-}
-
-YubiKey* YubiKey::m_instance(Q_NULLPTR);
+YubiKey* YubiKey::m_instance(nullptr);
 
 YubiKey* YubiKey::instance()
 {
@@ -123,112 +71,64 @@ bool YubiKey::isInitialized()
     return m_initialized;
 }
 
-void YubiKey::findValidKeys()
+bool YubiKey::findValidKeys()
 {
-    m_error.clear();
-    if (!isInitialized()) {
-        return;
-    }
+    QMutexLocker lock(&s_interfaceMutex);
 
-    QtConcurrent::run([this] {
-        if (!m_mutex.tryLock(1000)) {
-            emit detectComplete(false);
-            return;
-        }
+    m_usbKeys = YubiKeyInterfaceUSB::instance()->findValidKeys();
+    m_pcscKeys = YubiKeyInterfacePCSC::instance()->findValidKeys();
 
-        // Remove all known keys
-        m_foundKeys.clear();
-
-        // Try to detect up to 4 connected hardware keys
-        for (int i = 0; i < MAX_KEYS; ++i) {
-            auto yk_key = openKey(i);
-            if (yk_key) {
-                auto serial = getSerial(yk_key);
-                if (serial == 0) {
-                    closeKey(yk_key);
-                    continue;
-                }
-
-                auto st = ykds_alloc();
-                yk_get_status(yk_key, st);
-                int vid, pid;
-                yk_get_key_vid_pid(yk_key, &vid, &pid);
-
-                auto vendor = vid == 0x1d50 ? QStringLiteral("OnlyKey") : QStringLiteral("YubiKey");
-
-                bool wouldBlock;
-                QList<QPair<int, QString>> ykSlots;
-                for (int slot = 1; slot <= 2; ++slot) {
-                    auto config = (slot == 1 ? CONFIG1_VALID : CONFIG2_VALID);
-                    if (!(ykds_touch_level(st) & config)) {
-                        // Slot is not configured
-                        continue;
-                    }
-                    // Don't actually challenge a YubiKey Neo or below, they always require button press
-                    // if it is enabled for the slot resulting in failed detection
-                    if (pid <= NEO_OTP_U2F_CCID_PID) {
-                        auto display = tr("%1 [%2] Configured Slot - %3")
-                                           .arg(vendor, QString::number(serial), QString::number(slot));
-                        ykSlots.append({slot, display});
-                    } else if (performTestChallenge(yk_key, slot, &wouldBlock)) {
-                        auto display =
-                            tr("%1 [%2] Challenge-Response - Slot %3 - %4")
-                                .arg(vendor,
-                                     QString::number(serial),
-                                     QString::number(slot),
-                                     wouldBlock ? tr("Press", "Challenge-Response Key interaction request")
-                                                : tr("Passive", "Challenge-Response Key no interaction required"));
-                        ykSlots.append({slot, display});
-                    }
-                }
-
-                if (!ykSlots.isEmpty()) {
-                    m_foundKeys.insert(serial, ykSlots);
-                }
-
-                ykds_free(st);
-                closeKey(yk_key);
-
-                Tools::wait(100);
-            } else if (yk_errno == YK_ENOKEY) {
-                // No more keys are connected
-                break;
-            } else if (yk_errno == YK_EUSBERR) {
-                qWarning("Hardware key USB error: %s", yk_usb_strerror());
-            } else {
-                qWarning("Hardware key error: %s", yk_strerror(yk_errno));
-            }
-        }
-
-        m_mutex.unlock();
-        emit detectComplete(!m_foundKeys.isEmpty());
-    });
+    return !m_usbKeys.isEmpty() || !m_pcscKeys.isEmpty();
 }
 
-QList<YubiKeySlot> YubiKey::foundKeys()
+void YubiKey::findValidKeysAsync()
 {
-    QList<YubiKeySlot> keys;
-    for (auto serial : m_foundKeys.uniqueKeys()) {
-        for (auto key : m_foundKeys.value(serial)) {
-            keys.append({serial, key.first});
-        }
-    }
-    return keys;
+    QtConcurrent::run([this] { emit detectComplete(findValidKeys()); });
 }
 
-QString YubiKey::getDisplayName(YubiKeySlot slot)
+YubiKey::KeyMap YubiKey::foundKeys()
 {
-    for (auto key : m_foundKeys.value(slot.first)) {
-        if (slot.second == key.first) {
-            return key.second;
-        }
+    QMutexLocker lock(&s_interfaceMutex);
+    KeyMap foundKeys;
+
+    for (auto i = m_usbKeys.cbegin(); i != m_usbKeys.cend(); ++i) {
+        foundKeys.insert(i.key(), i.value());
     }
-    return tr("%1 Invalid slot specified - %2").arg(QString::number(slot.first), QString::number(slot.second));
+
+    for (auto i = m_pcscKeys.cbegin(); i != m_pcscKeys.cend(); ++i) {
+        foundKeys.insert(i.key(), i.value());
+    }
+
+    return foundKeys;
 }
 
 QString YubiKey::errorMessage()
 {
-    return m_error;
+    QMutexLocker lock(&s_interfaceMutex);
+
+    QString error;
+    error.clear();
+    if (!m_error.isNull()) {
+        error += tr("General: ") + m_error;
+    }
+
+    QString usb_error = YubiKeyInterfaceUSB::instance()->errorMessage();
+    if (!usb_error.isNull()) {
+        if (!error.isNull()) {
+            error += " | ";
+        }
+        error += "USB: " + usb_error;
+    }
+
+    QString pcsc_error = YubiKeyInterfacePCSC::instance()->errorMessage();
+    if (!pcsc_error.isNull()) {
+        if (!error.isNull()) {
+            error += " | ";
+        }
+        error += "PCSC: " + pcsc_error;
+    }
+
+    return error;
 }
 
 /**
@@ -241,25 +141,16 @@ QString YubiKey::errorMessage()
  */
 bool YubiKey::testChallenge(YubiKeySlot slot, bool* wouldBlock)
 {
-    bool ret = false;
-    auto* yk_key = openKeySerial(slot.first);
-    if (yk_key) {
-        ret = performTestChallenge(yk_key, slot.second, wouldBlock);
-    }
-    return ret;
-}
+    QMutexLocker lock(&s_interfaceMutex);
 
-bool YubiKey::performTestChallenge(void* key, int slot, bool* wouldBlock)
-{
-    auto chall = randomGen()->randomArray(1);
-    Botan::secure_vector<char> resp;
-    auto ret = performChallenge(static_cast<YK_KEY*>(key), slot, false, chall, resp);
-    if (ret == SUCCESS || ret == WOULDBLOCK) {
-        if (wouldBlock) {
-            *wouldBlock = ret == WOULDBLOCK;
-        }
-        return true;
+    if (m_usbKeys.contains(slot)) {
+        return YubiKeyInterfaceUSB::instance()->testChallenge(slot, wouldBlock);
     }
+
+    if (m_pcscKeys.contains(slot)) {
+        return YubiKeyInterfacePCSC::instance()->testChallenge(slot, wouldBlock);
+    }
+
     return false;
 }
 
@@ -275,89 +166,25 @@ bool YubiKey::performTestChallenge(void* key, int slot, bool* wouldBlock)
 YubiKey::ChallengeResult
 YubiKey::challenge(YubiKeySlot slot, const QByteArray& challenge, Botan::secure_vector<char>& response)
 {
+    QMutexLocker lock(&s_interfaceMutex);
+
     m_error.clear();
-    if (!m_initialized) {
-        m_error = tr("The YubiKey interface has not been initialized.");
-        return ERROR;
+
+    // Make sure we tried to find available keys
+    if (m_usbKeys.isEmpty() && m_pcscKeys.isEmpty()) {
+        findValidKeys();
     }
 
-    // Try to grab a lock for 1 second, fail out if not possible
-    if (!m_mutex.tryLock(1000)) {
-        m_error = tr("Hardware key is currently in use.");
-        return ERROR;
+    if (m_usbKeys.contains(slot)) {
+        return YubiKeyInterfaceUSB::instance()->challenge(slot, challenge, response);
     }
 
-    auto* yk_key = openKeySerial(slot.first);
-    if (!yk_key) {
-        // Key with specified serial number is not connected
-        m_error =
-            tr("Could not find hardware key with serial number %1. Please plug it in to continue.").arg(slot.first);
-        m_mutex.unlock();
-        return ERROR;
+    if (m_pcscKeys.contains(slot)) {
+        return YubiKeyInterfacePCSC::instance()->challenge(slot, challenge, response);
     }
 
-    emit challengeStarted();
-    auto ret = performChallenge(yk_key, slot.second, true, challenge, response);
+    m_error = tr("Could not find interface for hardware key with serial number %1. Please connect it to continue.")
+                  .arg(slot.first);
 
-    closeKey(yk_key);
-    emit challengeCompleted();
-    m_mutex.unlock();
-
-    return ret;
-}
-
-YubiKey::ChallengeResult YubiKey::performChallenge(void* key,
-                                                   int slot,
-                                                   bool mayBlock,
-                                                   const QByteArray& challenge,
-                                                   Botan::secure_vector<char>& response)
-{
-    m_error.clear();
-    int yk_cmd = (slot == 1) ? SLOT_CHAL_HMAC1 : SLOT_CHAL_HMAC2;
-    QByteArray paddedChallenge = challenge;
-
-    // yk_challenge_response() insists on 64 bytes response buffer */
-    response.clear();
-    response.resize(64);
-
-    /* The challenge sent to the yubikey should always be 64 bytes for
-     * compatibility with all configurations.  Follow PKCS7 padding.
-     *
-     * There is some question whether or not 64 bytes fixed length
-     * configurations even work, some docs say avoid it.
-     */
-    const int padLen = 64 - paddedChallenge.size();
-    if (padLen > 0) {
-        paddedChallenge.append(QByteArray(padLen, padLen));
-    }
-
-    const unsigned char* c;
-    unsigned char* r;
-    c = reinterpret_cast<const unsigned char*>(paddedChallenge.constData());
-    r = reinterpret_cast<unsigned char*>(response.data());
-
-    int ret = yk_challenge_response(
-        static_cast<YK_KEY*>(key), yk_cmd, mayBlock, paddedChallenge.size(), c, response.size(), r);
-
-    // actual HMAC-SHA1 response is only 20 bytes
-    response.resize(20);
-
-    if (!ret) {
-        if (yk_errno == YK_EWOULDBLOCK) {
-            return WOULDBLOCK;
-        } else if (yk_errno) {
-            if (yk_errno == YK_ETIMEOUT) {
-                m_error = tr("Hardware key timed out waiting for user interaction.");
-            } else if (yk_errno == YK_EUSBERR) {
-                m_error = tr("A USB error occurred when accessing the hardware key: %1").arg(yk_usb_strerror());
-            } else {
-                m_error = tr("Failed to complete a challenge-response, the specific error was: %1")
-                              .arg(yk_strerror(yk_errno));
-            }
-
-            return ERROR;
-        }
-    }
-
-    return SUCCESS;
+    return ChallengeResult::YCR_ERROR;
 }

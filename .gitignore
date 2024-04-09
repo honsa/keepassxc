@@ -23,5 +23,11 @@ desktop.ini
 
 # MSVC Files
 CMakeSettings.json
+CMakePresets.json
+CMakeUserPresets.json
 .vs/
 out/
+
+# vcpkg
+vcpkg_installed*/
+

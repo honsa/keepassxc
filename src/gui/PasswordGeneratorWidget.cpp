@@ -1,6 +1,6 @@
 /*
  *  Copyright (C) 2013 Felix Geyer <debfx@fobos.de>
- *  Copyright (C) 2020 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2022 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -19,6 +19,7 @@
 #include "PasswordGeneratorWidget.h"
 #include "ui_PasswordGeneratorWidget.h"
 
+#include <QCloseEvent>
 #include <QDir>
 #include <QShortcut>
 #include <QTimer>
@@ -27,7 +28,9 @@
 #include "core/PasswordHealth.h"
 #include "core/Resources.h"
 #include "gui/Clipboard.h"
+#include "gui/FileDialog.h"
 #include "gui/Icons.h"
+#include "gui/MessageBox.h"
 #include "gui/styles/StateColorPalette.h"
 
 PasswordGeneratorWidget::PasswordGeneratorWidget(QWidget* parent)
@@ -42,6 +45,8 @@ PasswordGeneratorWidget::PasswordGeneratorWidget(QWidget* parent)
     m_ui->buttonGenerate->setToolTip(
         tr("Regenerate password (%1)").arg(m_ui->buttonGenerate->shortcut().toString(QKeySequence::NativeText)));
     m_ui->buttonCopy->setIcon(icons()->icon("clipboard-text"));
+    m_ui->buttonDeleteWordList->setIcon(icons()->icon("trash"));
+    m_ui->buttonAddWordList->setIcon(icons()->icon("document-new"));
     m_ui->buttonClose->setShortcut(Qt::Key_Escape);
 
     // Add two shortcuts to save the form CTRL+Enter and CTRL+S
@@ -51,7 +56,7 @@ PasswordGeneratorWidget::PasswordGeneratorWidget(QWidget* parent)
     connect(shortcut, &QShortcut::activated, this, [this] { applyPassword(); });
 
     connect(m_ui->editNewPassword, SIGNAL(textChanged(QString)), SLOT(updateButtonsEnabled(QString)));
-    connect(m_ui->editNewPassword, SIGNAL(textChanged(QString)), SLOT(updatePasswordStrength(QString)));
+    connect(m_ui->editNewPassword, SIGNAL(textChanged(QString)), SLOT(updatePasswordStrength()));
     connect(m_ui->buttonAdvancedMode, SIGNAL(toggled(bool)), SLOT(setAdvancedMode(bool)));
     connect(m_ui->buttonAddHex, SIGNAL(clicked()), SLOT(excludeHexChars()));
     connect(m_ui->editAdditionalChars, SIGNAL(textChanged(QString)), SLOT(updateGenerator()));
@@ -59,6 +64,8 @@ PasswordGeneratorWidget::PasswordGeneratorWidget(QWidget* parent)
     connect(m_ui->buttonApply, SIGNAL(clicked()), SLOT(applyPassword()));
     connect(m_ui->buttonCopy, SIGNAL(clicked()), SLOT(copyPassword()));
     connect(m_ui->buttonGenerate, SIGNAL(clicked()), SLOT(regeneratePassword()));
+    connect(m_ui->buttonDeleteWordList, SIGNAL(clicked()), SLOT(deleteWordList()));
+    connect(m_ui->buttonAddWordList, SIGNAL(clicked()), SLOT(addWordList()));
     connect(m_ui->buttonClose, SIGNAL(clicked()), SIGNAL(closed()));
 
     connect(m_ui->sliderLength, SIGNAL(valueChanged(int)), SLOT(passwordLengthChanged(int)));
@@ -76,7 +83,7 @@ PasswordGeneratorWidget::PasswordGeneratorWidget(QWidget* parent)
     // set font size of password quality and entropy labels dynamically to 80% of
     // the default font size, but make it no smaller than 8pt
     QFont defaultFont;
-    int smallerSize = static_cast<int>(defaultFont.pointSize() * 0.8f);
+    auto smallerSize = static_cast<int>(defaultFont.pointSize() * 0.8f);
     if (smallerSize >= 8) {
         defaultFont.setPointSize(smallerSize);
         m_ui->entropyLabel->setFont(defaultFont);
@@ -91,22 +98,30 @@ PasswordGeneratorWidget::PasswordGeneratorWidget(QWidget* parent)
     m_ui->wordCaseComboBox->addItem(tr("UPPER CASE"), PassphraseGenerator::UPPERCASE);
     m_ui->wordCaseComboBox->addItem(tr("Title Case"), PassphraseGenerator::TITLECASE);
 
+    // load system-wide wordlists
     QDir path(resources()->wordlistPath(""));
-    QStringList files = path.entryList(QDir::Files);
-    m_ui->comboBoxWordList->addItems(files);
-    if (files.size() > 1) {
-        m_ui->comboBoxWordList->setVisible(true);
-        m_ui->labelWordList->setVisible(true);
-    } else {
-        m_ui->comboBoxWordList->setVisible(false);
-        m_ui->labelWordList->setVisible(false);
+    for (const auto& fileName : path.entryList(QDir::Files)) {
+        m_ui->comboBoxWordList->addItem(tr("(SYSTEM)") + " " + fileName, fileName);
+    }
+
+    m_firstCustomWordlistIndex = m_ui->comboBoxWordList->count();
+
+    // load user-provided wordlists
+    path = QDir(resources()->userWordlistPath(""));
+    for (const auto& fileName : path.entryList(QDir::Files)) {
+        m_ui->comboBoxWordList->addItem(fileName, path.absolutePath() + QDir::separator() + fileName);
     }
 
     loadSettings();
 }
 
-PasswordGeneratorWidget::~PasswordGeneratorWidget()
+PasswordGeneratorWidget::~PasswordGeneratorWidget() = default;
+
+void PasswordGeneratorWidget::closeEvent(QCloseEvent* event)
 {
+    // Emits closed signal when clicking X from title bar
+    emit closed();
+    QWidget::closeEvent(event);
 }
 
 PasswordGeneratorWidget* PasswordGeneratorWidget::popupGenerator(QWidget* parent)
@@ -156,7 +171,10 @@ void PasswordGeneratorWidget::loadSettings()
     // Diceware config
     m_ui->spinBoxWordCount->setValue(config()->get(Config::PasswordGenerator_WordCount).toInt());
     m_ui->editWordSeparator->setText(config()->get(Config::PasswordGenerator_WordSeparator).toString());
-    m_ui->comboBoxWordList->setCurrentText(config()->get(Config::PasswordGenerator_WordList).toString());
+    int i = m_ui->comboBoxWordList->findData(config()->get(Config::PasswordGenerator_WordList).toString());
+    if (i > -1) {
+        m_ui->comboBoxWordList->setCurrentIndex(i);
+    }
     m_ui->wordCaseComboBox->setCurrentIndex(config()->get(Config::PasswordGenerator_WordCase).toInt());
 
     // Password or diceware?
@@ -197,7 +215,7 @@ void PasswordGeneratorWidget::saveSettings()
     // Diceware config
     config()->set(Config::PasswordGenerator_WordCount, m_ui->spinBoxWordCount->value());
     config()->set(Config::PasswordGenerator_WordSeparator, m_ui->editWordSeparator->text());
-    config()->set(Config::PasswordGenerator_WordList, m_ui->comboBoxWordList->currentText());
+    config()->set(Config::PasswordGenerator_WordList, m_ui->comboBoxWordList->currentData());
     config()->set(Config::PasswordGenerator_WordCase, m_ui->wordCaseComboBox->currentIndex());
 
     // Password or diceware?
@@ -233,15 +251,11 @@ void PasswordGeneratorWidget::regeneratePassword()
 {
     if (m_ui->tabWidget->currentIndex() == Password) {
         if (m_passwordGenerator->isValid()) {
-            QString password = m_passwordGenerator->generatePassword();
-            m_ui->editNewPassword->setText(password);
-            updatePasswordStrength(password);
+            m_ui->editNewPassword->setText(m_passwordGenerator->generatePassword());
         }
     } else {
         if (m_dicewareGenerator->isValid()) {
-            QString password = m_dicewareGenerator->generatePassphrase();
-            m_ui->editNewPassword->setText(password);
-            updatePasswordStrength(password);
+            m_ui->editNewPassword->setText(m_dicewareGenerator->generatePassphrase());
         }
     }
 }
@@ -254,26 +268,58 @@ void PasswordGeneratorWidget::updateButtonsEnabled(const QString& password)
     m_ui->buttonCopy->setEnabled(!password.isEmpty());
 }
 
-void PasswordGeneratorWidget::updatePasswordStrength(const QString& password)
+void PasswordGeneratorWidget::updatePasswordStrength()
 {
-    PasswordHealth health(password);
+    // Calculate the password / passphrase health
+    PasswordHealth passwordHealth(0);
     if (m_ui->tabWidget->currentIndex() == Diceware) {
-        // Diceware estimates entropy differently
-        health = PasswordHealth(m_dicewareGenerator->estimateEntropy());
-
-        m_ui->charactersInPassphraseLabel->setText(QString::number(password.length()));
+        passwordHealth.init(m_dicewareGenerator->estimateEntropy());
+        m_ui->charactersInPassphraseLabel->setText(QString::number(m_ui->editNewPassword->text().length()));
+    } else {
+        passwordHealth = PasswordHealth(m_ui->editNewPassword->text());
     }
 
-    m_ui->entropyLabel->setText(tr("Entropy: %1 bit").arg(QString::number(health.entropy(), 'f', 2)));
+    // Update the entropy text labels
+    m_ui->entropyLabel->setText(tr("Entropy: %1 bit").arg(QString::number(passwordHealth.entropy(), 'f', 2)));
+    m_ui->entropyProgressBar->setValue(std::min(int(passwordHealth.entropy()), m_ui->entropyProgressBar->maximum()));
 
-    m_ui->entropyProgressBar->setValue(std::min(int(health.entropy()), m_ui->entropyProgressBar->maximum()));
+    // Update the visual strength meter
+    QString style = m_ui->entropyProgressBar->styleSheet();
+    QRegularExpression re("(QProgressBar::chunk\\s*\\{.*?background-color:)[^;]+;",
+                          QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
+    style.replace(re, "\\1 %1;");
 
-    colorStrengthIndicator(health);
+    StateColorPalette statePalette;
+    switch (passwordHealth.quality()) {
+    case PasswordHealth::Quality::Bad:
+    case PasswordHealth::Quality::Poor:
+        m_ui->entropyProgressBar->setStyleSheet(
+            style.arg(statePalette.color(StateColorPalette::HealthCritical).name()));
+        m_ui->strengthLabel->setText(tr("Password Quality: %1").arg(tr("Poor", "Password quality")));
+        break;
+
+    case PasswordHealth::Quality::Weak:
+        m_ui->entropyProgressBar->setStyleSheet(style.arg(statePalette.color(StateColorPalette::HealthBad).name()));
+        m_ui->strengthLabel->setText(tr("Password Quality: %1").arg(tr("Weak", "Password quality")));
+        break;
+
+    case PasswordHealth::Quality::Good:
+        m_ui->entropyProgressBar->setStyleSheet(style.arg(statePalette.color(StateColorPalette::HealthOk).name()));
+        m_ui->strengthLabel->setText(tr("Password Quality: %1").arg(tr("Good", "Password quality")));
+        break;
+
+    case PasswordHealth::Quality::Excellent:
+        m_ui->entropyProgressBar->setStyleSheet(
+            style.arg(statePalette.color(StateColorPalette::HealthExcellent).name()));
+        m_ui->strengthLabel->setText(tr("Password Quality: %1").arg(tr("Excellent", "Password quality")));
+        break;
+    }
 }
 
 void PasswordGeneratorWidget::applyPassword()
 {
     saveSettings();
+    m_passwordGenerated = true;
     emit appliedPassword(m_ui->editNewPassword->text());
     emit closed();
 }
@@ -321,6 +367,91 @@ bool PasswordGeneratorWidget::isPasswordVisible() const
     return m_ui->editNewPassword->isPasswordVisible();
 }
 
+bool PasswordGeneratorWidget::isPasswordGenerated() const
+{
+    return m_passwordGenerated;
+}
+
+void PasswordGeneratorWidget::deleteWordList()
+{
+    if (m_ui->comboBoxWordList->currentIndex() < m_firstCustomWordlistIndex) {
+        return;
+    }
+
+    QFile file(m_ui->comboBoxWordList->currentData().toString());
+    if (!file.exists()) {
+        return;
+    }
+
+    auto result = MessageBox::question(this,
+                                       tr("Confirm Delete Wordlist"),
+                                       tr("Do you really want to delete the wordlist \"%1\"?").arg(file.fileName()),
+                                       MessageBox::Delete | MessageBox::Cancel,
+                                       MessageBox::Cancel);
+    if (result != MessageBox::Delete) {
+        return;
+    }
+
+    if (!file.remove()) {
+        MessageBox::critical(this, tr("Failed to delete wordlist"), file.errorString());
+        return;
+    }
+
+    m_ui->comboBoxWordList->removeItem(m_ui->comboBoxWordList->currentIndex());
+    updateGenerator();
+}
+
+void PasswordGeneratorWidget::addWordList()
+{
+    auto filter = QString("%1 (*.txt *.asc *.wordlist);;%2 (*)").arg(tr("Wordlists"), tr("All files"));
+    auto filePath = fileDialog()->getOpenFileName(this, tr("Select Custom Wordlist"), "", filter);
+    if (filePath.isEmpty()) {
+        return;
+    }
+
+    // create directory for user-specified wordlists, if necessary
+    QDir destDir(resources()->userWordlistPath(""));
+    destDir.mkpath(".");
+
+    // check if destination wordlist already exists
+    QString fileName = QFileInfo(filePath).fileName();
+    QString destPath = destDir.absolutePath() + QDir::separator() + fileName;
+    QFile dest(destPath);
+    if (dest.exists()) {
+        auto response = MessageBox::warning(this,
+                                            tr("Overwrite Wordlist?"),
+                                            tr("Wordlist \"%1\" already exists as a custom wordlist.\n"
+                                               "Do you want to overwrite it?")
+                                                .arg(fileName),
+                                            MessageBox::Overwrite | MessageBox::Cancel,
+                                            MessageBox::Cancel);
+        if (response != MessageBox::Overwrite) {
+            return;
+        }
+        if (!dest.remove()) {
+            MessageBox::critical(this, tr("Failed to delete wordlist"), dest.errorString());
+            return;
+        }
+    }
+
+    // copy wordlist to destination path and add corresponding item to the combo box
+    QFile file(filePath);
+    if (!file.copy(destPath)) {
+        MessageBox::critical(this, tr("Failed to add wordlist"), file.errorString());
+        return;
+    }
+
+    auto index = m_ui->comboBoxWordList->findData(destPath);
+    if (index == -1) {
+        m_ui->comboBoxWordList->addItem(fileName, destPath);
+        index = m_ui->comboBoxWordList->count() - 1;
+    }
+    m_ui->comboBoxWordList->setCurrentIndex(index);
+
+    // update the password generator
+    updateGenerator();
+}
+
 void PasswordGeneratorWidget::setAdvancedMode(bool advanced)
 {
     saveSettings();
@@ -349,7 +480,7 @@ void PasswordGeneratorWidget::setAdvancedMode(bool advanced)
 
 void PasswordGeneratorWidget::excludeHexChars()
 {
-    m_ui->editExcludedChars->setText("GHIJKLMNOPQRSTUVWXYZghijklmnopqrstuvwxyz");
+    m_ui->editExcludedChars->setText("GHIJKLMNOPQRSTUVWXYZ");
     m_ui->checkBoxNumbers->setChecked(true);
     m_ui->checkBoxUpper->setChecked(true);
 
@@ -363,41 +494,6 @@ void PasswordGeneratorWidget::excludeHexChars()
     m_ui->checkBoxBraces->setChecked(false);
 
     updateGenerator();
-}
-
-void PasswordGeneratorWidget::colorStrengthIndicator(const PasswordHealth& health)
-{
-    // Take the existing stylesheet and convert the text and background color to arguments
-    QString style = m_ui->entropyProgressBar->styleSheet();
-    QRegularExpression re("(QProgressBar::chunk\\s*\\{.*?background-color:)[^;]+;",
-                          QRegularExpression::CaseInsensitiveOption | QRegularExpression::DotMatchesEverythingOption);
-    style.replace(re, "\\1 %1;");
-
-    StateColorPalette statePalette;
-    switch (health.quality()) {
-    case PasswordHealth::Quality::Bad:
-    case PasswordHealth::Quality::Poor:
-        m_ui->entropyProgressBar->setStyleSheet(
-            style.arg(statePalette.color(StateColorPalette::HealthCritical).name()));
-        m_ui->strengthLabel->setText(tr("Password Quality: %1").arg(tr("Poor", "Password quality")));
-        break;
-
-    case PasswordHealth::Quality::Weak:
-        m_ui->entropyProgressBar->setStyleSheet(style.arg(statePalette.color(StateColorPalette::HealthBad).name()));
-        m_ui->strengthLabel->setText(tr("Password Quality: %1").arg(tr("Weak", "Password quality")));
-        break;
-
-    case PasswordHealth::Quality::Good:
-        m_ui->entropyProgressBar->setStyleSheet(style.arg(statePalette.color(StateColorPalette::HealthOk).name()));
-        m_ui->strengthLabel->setText(tr("Password Quality: %1").arg(tr("Good", "Password quality")));
-        break;
-
-    case PasswordHealth::Quality::Excellent:
-        m_ui->entropyProgressBar->setStyleSheet(
-            style.arg(statePalette.color(StateColorPalette::HealthExcellent).name()));
-        m_ui->strengthLabel->setText(tr("Password Quality: %1").arg(tr("Excellent", "Password quality")));
-        break;
-    }
 }
 
 PasswordGenerator::CharClasses PasswordGeneratorWidget::charClasses()
@@ -476,51 +572,15 @@ void PasswordGeneratorWidget::updateGenerator()
         auto classes = charClasses();
         auto flags = generatorFlags();
 
-        int length = 0;
-        if (flags.testFlag(PasswordGenerator::CharFromEveryGroup)) {
-            if (classes.testFlag(PasswordGenerator::LowerLetters)) {
-                ++length;
-            }
-            if (classes.testFlag(PasswordGenerator::UpperLetters)) {
-                ++length;
-            }
-            if (classes.testFlag(PasswordGenerator::Numbers)) {
-                ++length;
-            }
-            if (classes.testFlag(PasswordGenerator::Braces)) {
-                ++length;
-            }
-            if (classes.testFlag(PasswordGenerator::Punctuation)) {
-                ++length;
-            }
-            if (classes.testFlag(PasswordGenerator::Quotes)) {
-                ++length;
-            }
-            if (classes.testFlag(PasswordGenerator::Dashes)) {
-                ++length;
-            }
-            if (classes.testFlag(PasswordGenerator::Math)) {
-                ++length;
-            }
-            if (classes.testFlag(PasswordGenerator::Logograms)) {
-                ++length;
-            }
-            if (classes.testFlag(PasswordGenerator::EASCII)) {
-                ++length;
-            }
-        }
-
-        length = qMax(length, m_ui->spinBoxLength->value());
-        m_passwordGenerator->setLength(length);
-        m_passwordGenerator->setCharClasses(classes);
-        m_passwordGenerator->setFlags(flags);
+        m_passwordGenerator->setLength(m_ui->spinBoxLength->value());
         if (m_ui->buttonAdvancedMode->isChecked()) {
-            m_passwordGenerator->setAdditionalChars(m_ui->editAdditionalChars->text());
-            m_passwordGenerator->setExcludedChars(m_ui->editExcludedChars->text());
+            m_passwordGenerator->setCharClasses(classes);
+            m_passwordGenerator->setCustomCharacterSet(m_ui->editAdditionalChars->text());
+            m_passwordGenerator->setExcludedCharacterSet(m_ui->editExcludedChars->text());
         } else {
-            m_passwordGenerator->setAdditionalChars("");
-            m_passwordGenerator->setExcludedChars("");
+            m_passwordGenerator->setCharClasses(classes);
         }
+        m_passwordGenerator->setFlags(flags);
 
         if (m_passwordGenerator->isValid()) {
             m_ui->buttonGenerate->setEnabled(true);
@@ -532,10 +592,15 @@ void PasswordGeneratorWidget::updateGenerator()
             static_cast<PassphraseGenerator::PassphraseWordCase>(m_ui->wordCaseComboBox->currentData().toInt()));
 
         m_dicewareGenerator->setWordCount(m_ui->spinBoxWordCount->value());
-        if (!m_ui->comboBoxWordList->currentText().isEmpty()) {
-            QString path = resources()->wordlistPath(m_ui->comboBoxWordList->currentText());
-            m_dicewareGenerator->setWordList(path);
+        auto path = m_ui->comboBoxWordList->currentData().toString();
+        if (m_ui->comboBoxWordList->currentIndex() < m_firstCustomWordlistIndex) {
+            path = resources()->wordlistPath(path);
+            m_ui->buttonDeleteWordList->setEnabled(false);
+        } else {
+            m_ui->buttonDeleteWordList->setEnabled(true);
         }
+        m_dicewareGenerator->setWordList(path);
+
         m_dicewareGenerator->setWordSeparator(m_ui->editWordSeparator->text());
 
         if (m_dicewareGenerator->isValid()) {

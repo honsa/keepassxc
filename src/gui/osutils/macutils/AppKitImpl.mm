@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2024 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2016 Lennart Glauer <mail@lennart-glauer.de>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -38,18 +38,7 @@
                                                                 name:NSWorkspaceSessionDidResignActiveNotification
                                                                 object:nil];
 
-        [[NSDistributedNotificationCenter defaultCenter] addObserver:self
-                                                            selector:@selector(interfaceThemeChanged:)
-                                                                name:@"AppleInterfaceThemeChangedNotification"
-                                                              object:nil];
-
-        // Unfortunately, there is no notification for a wallpaper change, which affects
-        // the status bar colour on macOS Big Sur, but we can at least subscribe to this.
-        [[NSDistributedNotificationCenter defaultCenter] addObserver:self
-                                                            selector:@selector(interfaceThemeChanged:)
-                                                                name:@"AppleColorPreferencesChangedNotification"
-                                                              object:nil];
-
+        [NSApp addObserver:self forKeyPath:@"effectiveAppearance" options:NSKeyValueObservingOptionNew context:nil];
     }
     return self;
 }
@@ -60,21 +49,36 @@
 - (void) didDeactivateApplicationObserver:(NSNotification*) notification
 {
     NSDictionary* userInfo = notification.userInfo;
-    NSRunningApplication* app = userInfo[NSWorkspaceApplicationKey];
+    NSRunningApplication* app = [userInfo objectForKey:NSWorkspaceApplicationKey];
 
     if (app.processIdentifier != [self ownProcessId]) {
         self.lastActiveApplication = app;
     }
 }
 
-//
-// Light / dark theme toggled
-//
-- (void) interfaceThemeChanged:(NSNotification*) notification
+- (void) observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey,id> *)change
+                       context:(void *)context
 {
-    Q_UNUSED(notification);
-    if (m_appkit) {
-        emit m_appkit->interfaceThemeChanged();
+    Q_UNUSED(object)
+    Q_UNUSED(change)
+    Q_UNUSED(context)
+    if ([keyPath isEqualToString:@"effectiveAppearance"]) {
+        if (m_appkit) {
+
+            void (^emitBlock)(void) = ^{
+                emit m_appkit->interfaceThemeChanged();
+            };
+
+            if(@available(macOS 11.0, *)) {
+                // Not sure why exactly this call is needed, but Apple sample code uses it so it's best to use it here too
+                [NSApp.effectiveAppearance performAsCurrentDrawingAppearance:emitBlock];
+            }
+            else {
+                emitBlock();
+            }
+        }
     }
 }
 
@@ -127,10 +131,7 @@
 //
 - (bool) isDarkMode
 {
-    NSDictionary* dict = [[NSUserDefaults standardUserDefaults] persistentDomainForName:NSGlobalDomain];
-    id style = [dict objectForKey:@"AppleInterfaceStyle"];
-    return ( style && [style isKindOfClass:[NSString class]]
-             && NSOrderedSame == [style caseInsensitiveCompare:@"dark"] );
+    return [NSApp.effectiveAppearance.name isEqualToString:NSAppearanceNameDarkAqua];
 }
 
 
@@ -139,6 +140,7 @@
 //
 - (bool) isStatusBarDark
 {
+#if __clang_major__ >= 9 && MAC_OS_X_VERSION_MIN_REQUIRED >= 101000
     if (@available(macOS 10.17, *)) {
         // This is an ugly hack, but I couldn't find a way to access QTrayIcon's NSStatusItem.
         NSStatusItem* dummy = [[NSStatusBar systemStatusBar] statusItemWithLength:0];
@@ -146,6 +148,7 @@
         [[NSStatusBar systemStatusBar] removeStatusItem:dummy];
         return [appearance containsString:@"dark"];
     }
+#endif
 
     return [self isDarkMode];
 }
@@ -166,9 +169,13 @@
 //
 - (bool) enableAccessibility
 {
+#if MAC_OS_X_VERSION_MIN_REQUIRED >= 1090
     // Request accessibility permissions for Auto-Type type on behalf of the user
     NSDictionary* opts = @{static_cast<id>(kAXTrustedCheckOptionPrompt): @YES};
     return AXIsProcessTrustedWithOptions(static_cast<CFDictionaryRef>(opts));
+#else
+    return YES;
+#endif
 }
 
 //
@@ -176,6 +183,7 @@
 //
 - (bool) enableScreenRecording
 {
+#if __clang_major__ >= 9 && MAC_OS_X_VERSION_MIN_REQUIRED >= 1080
     if (@available(macOS 10.15, *)) {
         // Request screen recording permission on macOS 10.15+
         // This is necessary to get the current window title
@@ -193,6 +201,7 @@
             return NO;
         }
     }
+#endif
     return YES;
 }
 
@@ -226,6 +235,7 @@ AppKit::~AppKit()
 {
     [[[NSWorkspace sharedWorkspace] notificationCenter] removeObserver:static_cast<id>(self)];
     [[NSDistributedNotificationCenter defaultCenter] removeObserver:static_cast<id>(self)];
+    [NSApp removeObserver:static_cast<id>(self) forKeyPath:@"effectiveAppearance"];
     [static_cast<id>(self) dealloc];
 }
 

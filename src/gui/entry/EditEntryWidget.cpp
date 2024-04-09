@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2023 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2010 Felix Geyer <debfx@fobos.de>
- *  Copyright (C) 2020 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -36,10 +36,12 @@
 #include "core/Database.h"
 #include "core/Entry.h"
 #include "core/EntryAttributes.h"
+#include "core/Group.h"
 #include "core/Metadata.h"
 #include "core/TimeDelta.h"
 #ifdef WITH_XC_SSHAGENT
 #include "sshagent/OpenSSHKey.h"
+#include "sshagent/OpenSSHKeyGenDialog.h"
 #include "sshagent/SSHAgent.h"
 #endif
 #ifdef WITH_XC_BROWSER
@@ -68,20 +70,20 @@ EditEntryWidget::EditEntryWidget(QWidget* parent)
     , m_browserUi(new Ui::EditEntryWidgetBrowser())
     , m_attachments(new EntryAttachments())
     , m_customData(new CustomData())
-    , m_mainWidget(new QScrollArea())
-    , m_advancedWidget(new QWidget())
-    , m_iconsWidget(new EditWidgetIcons())
-    , m_autoTypeWidget(new QWidget())
+    , m_mainWidget(new QScrollArea(this))
+    , m_advancedWidget(new QWidget(this))
+    , m_iconsWidget(new EditWidgetIcons(this))
+    , m_autoTypeWidget(new QWidget(this))
 #ifdef WITH_XC_SSHAGENT
-    , m_sshAgentWidget(new QWidget())
+    , m_sshAgentWidget(new QWidget(this))
 #endif
 #ifdef WITH_XC_BROWSER
     , m_browserSettingsChanged(false)
-    , m_browserWidget(new QWidget())
+    , m_browserWidget(new QWidget(this))
     , m_additionalURLsDataModel(new EntryURLModel(this))
 #endif
-    , m_editWidgetProperties(new EditWidgetProperties())
-    , m_historyWidget(new QWidget())
+    , m_editWidgetProperties(new EditWidgetProperties(this))
+    , m_historyWidget(new QWidget(this))
     , m_entryAttributes(new EntryAttributes(this))
     , m_attributesModel(new EntryAttributesModel(m_advancedWidget))
     , m_historyModel(new EntryHistoryModel(this))
@@ -113,6 +115,7 @@ EditEntryWidget::EditEntryWidget(QWidget* parent)
     m_entryModifiedTimer.setSingleShot(true);
     m_entryModifiedTimer.setInterval(0);
     connect(&m_entryModifiedTimer, &QTimer::timeout, this, [this] {
+        // TODO: Upon refactor of this widget, this needs to merge unsaved changes in the UI
         if (isVisible() && m_entry) {
             setForms(m_entry);
         }
@@ -130,11 +133,11 @@ EditEntryWidget::EditEntryWidget(QWidget* parent)
     connect(m_iconsWidget, SIGNAL(messageEditEntryDismiss()), SLOT(hideMessage()));
 
     m_editWidgetProperties->setCustomData(m_customData.data());
+
+    m_mainUi->passwordEdit->setQualityVisible(true);
 }
 
-EditEntryWidget::~EditEntryWidget()
-{
-}
+EditEntryWidget::~EditEntryWidget() = default;
 
 void EditEntryWidget::setupMain()
 {
@@ -159,6 +162,9 @@ void EditEntryWidget::setupMain()
     connect(m_mainUi->urlEdit, SIGNAL(textChanged(QString)), m_iconsWidget, SLOT(setUrl(QString)));
     m_mainUi->urlEdit->enableVerifyMode();
 #endif
+#ifdef WITH_XC_BROWSER
+    connect(m_mainUi->urlEdit, SIGNAL(textChanged(QString)), this, SLOT(entryURLEdited(const QString&)));
+#endif
     connect(m_mainUi->expireCheck, &QCheckBox::toggled, [&](bool enabled) {
         m_mainUi->expireDatePicker->setEnabled(enabled);
         if (enabled) {
@@ -166,7 +172,7 @@ void EditEntryWidget::setupMain()
         }
     });
 
-    connect(m_mainUi->notesEnabled, SIGNAL(toggled(bool)), this, SLOT(toggleHideNotes(bool)));
+    connect(m_mainUi->revealNotesButton, &QToolButton::clicked, this, &EditEntryWidget::toggleHideNotes);
 
     m_mainUi->expirePresets->setMenu(createPresetsMenu());
     connect(m_mainUi->expirePresets->menu(), SIGNAL(triggered(QAction*)), this, SLOT(useExpiryPreset(QAction*)));
@@ -219,7 +225,7 @@ void EditEntryWidget::openAutotypeHelp()
 void EditEntryWidget::setupAutoType()
 {
     m_autoTypeUi->setupUi(m_autoTypeWidget);
-    addPage(tr("Auto-Type"), icons()->icon("key-enter"), m_autoTypeWidget);
+    addPage(tr("Auto-Type"), icons()->icon("auto-type"), m_autoTypeWidget);
 
     m_autoTypeUi->openHelpButton->setIcon(icons()->icon("system-help"));
 
@@ -231,10 +237,7 @@ void EditEntryWidget::setupAutoType()
 
     // clang-format off
     connect(m_autoTypeUi->enableButton, SIGNAL(toggled(bool)), SLOT(updateAutoTypeEnabled()));
-    connect(m_autoTypeUi->customSequenceButton, SIGNAL(toggled(bool)),
-            m_autoTypeUi->sequenceEdit, SLOT(setEnabled(bool)));
-    connect(m_autoTypeUi->customSequenceButton, SIGNAL(toggled(bool)),
-            m_autoTypeUi->openHelpButton, SLOT(setEnabled(bool)));
+    connect(m_autoTypeUi->customSequenceButton, &QRadioButton::toggled, this, &EditEntryWidget::updateAutoTypeEnabled);
     connect(m_autoTypeUi->openHelpButton, SIGNAL(clicked()), SLOT(openAutotypeHelp()));
     connect(m_autoTypeUi->customWindowSequenceButton, SIGNAL(toggled(bool)),
             m_autoTypeUi->windowSequenceEdit, SLOT(setEnabled(bool)));
@@ -262,6 +265,11 @@ void EditEntryWidget::setupBrowser()
         addPage(tr("Browser Integration"), icons()->icon("internet-web-browser"), m_browserWidget);
         m_additionalURLsDataModel->setEntryAttributes(m_entryAttributes);
         m_browserUi->additionalURLsView->setModel(m_additionalURLsDataModel);
+
+        m_browserUi->messageWidget->setCloseButtonVisible(false);
+        m_browserUi->messageWidget->setAutoHideTimeout(-1);
+        m_browserUi->messageWidget->setAnimate(false);
+        m_browserUi->messageWidget->setVisible(false);
 
         // Use a custom item delegate to align the icon to the right side
         auto iconDelegate = new URLModelIconDelegate(m_browserUi->additionalURLsView);
@@ -296,31 +304,44 @@ void EditEntryWidget::updateBrowser()
         return;
     }
 
-    auto skip = m_browserUi->skipAutoSubmitCheckbox->isChecked();
-    auto hide = m_browserUi->hideEntryCheckbox->isChecked();
-    auto onlyHttpAuth = m_browserUi->onlyHttpAuthCheckbox->isChecked();
-    auto notHttpAuth = m_browserUi->notHttpAuthCheckbox->isChecked();
-    m_customData->set(BrowserService::OPTION_SKIP_AUTO_SUBMIT, (skip ? TRUE_STR : FALSE_STR));
-    m_customData->set(BrowserService::OPTION_HIDE_ENTRY, (hide ? TRUE_STR : FALSE_STR));
-    m_customData->set(BrowserService::OPTION_ONLY_HTTP_AUTH, (onlyHttpAuth ? TRUE_STR : FALSE_STR));
-    m_customData->set(BrowserService::OPTION_NOT_HTTP_AUTH, (notHttpAuth ? TRUE_STR : FALSE_STR));
+    // Only update the custom data if no group level settings are used (checkbox is enabled)
+    if (m_browserUi->hideEntryCheckbox->isEnabled()) {
+        auto hide = m_browserUi->hideEntryCheckbox->isChecked();
+        m_customData->set(BrowserService::OPTION_HIDE_ENTRY, (hide ? TRUE_STR : FALSE_STR));
+    }
+
+    if (m_browserUi->skipAutoSubmitCheckbox->isEnabled()) {
+        auto skip = m_browserUi->skipAutoSubmitCheckbox->isChecked();
+        m_customData->set(BrowserService::OPTION_SKIP_AUTO_SUBMIT, (skip ? TRUE_STR : FALSE_STR));
+    }
+
+    if (m_browserUi->onlyHttpAuthCheckbox->isEnabled()) {
+        auto onlyHttpAuth = m_browserUi->onlyHttpAuthCheckbox->isChecked();
+        m_customData->set(BrowserService::OPTION_ONLY_HTTP_AUTH, (onlyHttpAuth ? TRUE_STR : FALSE_STR));
+    }
+
+    if (m_browserUi->notHttpAuthCheckbox->isEnabled()) {
+        auto notHttpAuth = m_browserUi->notHttpAuthCheckbox->isChecked();
+        m_customData->set(BrowserService::OPTION_NOT_HTTP_AUTH, (notHttpAuth ? TRUE_STR : FALSE_STR));
+    }
 }
 
 void EditEntryWidget::insertURL()
 {
     Q_ASSERT(!m_history);
 
-    QString name("KP2A_URL");
+    QString name(EntryAttributes::AdditionalUrlAttribute);
     int i = 1;
 
     while (m_entryAttributes->keys().contains(name)) {
-        name = QString("KP2A_URL_%1").arg(i);
+        name = QString("%1_%2").arg(EntryAttributes::AdditionalUrlAttribute, QString::number(i));
         i++;
     }
 
     m_entryAttributes->set(name, tr("<empty URL>"));
     QModelIndex index = m_additionalURLsDataModel->indexByKey(name);
 
+    m_additionalURLsDataModel->setEntryUrl(m_entry->url());
     m_browserUi->additionalURLsView->setCurrentIndex(index);
     m_browserUi->additionalURLsView->edit(index);
 
@@ -381,6 +402,11 @@ void EditEntryWidget::updateCurrentURL()
         m_browserUi->removeURLButton->setEnabled(false);
     }
 }
+
+void EditEntryWidget::entryURLEdited(const QString& url)
+{
+    m_additionalURLsDataModel->setEntryUrl(url);
+}
 #endif
 
 void EditEntryWidget::setupProperties()
@@ -425,6 +451,7 @@ void EditEntryWidget::setupEntryUpdate()
 #ifdef WITH_XC_NETWORKING
     connect(m_mainUi->urlEdit, SIGNAL(textChanged(QString)), this, SLOT(updateFaviconButtonEnable(QString)));
 #endif
+    connect(m_mainUi->tagsList, SIGNAL(tagsEdited()), this, SLOT(setModified()));
     connect(m_mainUi->expireCheck, SIGNAL(stateChanged(int)), this, SLOT(setModified()));
     connect(m_mainUi->expireDatePicker, SIGNAL(dateTimeChanged(QDateTime)), this, SLOT(setModified()));
     connect(m_mainUi->notesEdit, SIGNAL(textChanged()), this, SLOT(setModified()));
@@ -486,7 +513,9 @@ void EditEntryWidget::emitHistoryEntryActivated(const QModelIndex& index)
     Q_ASSERT(!m_history);
 
     Entry* entry = m_historyModel->entryFromIndex(index);
-    emit historyEntryActivated(entry);
+    if (entry) {
+        emit historyEntryActivated(entry);
+    }
 }
 
 void EditEntryWidget::histEntryActivated(const QModelIndex& index)
@@ -503,7 +532,7 @@ void EditEntryWidget::updateHistoryButtons(const QModelIndex& current, const QMo
 {
     Q_UNUSED(previous);
 
-    if (current.isValid()) {
+    if (m_historyModel->entryFromIndex(current)) {
         m_historyUi->showButton->setEnabled(true);
         m_historyUi->restoreButton->setEnabled(true);
         m_historyUi->deleteButton->setEnabled(true);
@@ -517,6 +546,7 @@ void EditEntryWidget::updateHistoryButtons(const QModelIndex& current, const QMo
 #ifdef WITH_XC_SSHAGENT
 void EditEntryWidget::setupSSHAgent()
 {
+    m_pendingPrivateKey = "";
     m_sshAgentUi->setupUi(m_sshAgentWidget);
 
     QFont fixedFont = Font::fixedFont();
@@ -537,6 +567,7 @@ void EditEntryWidget::setupSSHAgent()
     connect(m_sshAgentUi->removeFromAgentButton, &QPushButton::clicked, this, &EditEntryWidget::removeKeyFromAgent);
     connect(m_sshAgentUi->decryptButton, &QPushButton::clicked, this, &EditEntryWidget::decryptPrivateKey);
     connect(m_sshAgentUi->copyToClipboardButton, &QPushButton::clicked, this, &EditEntryWidget::copyPublicKey);
+    connect(m_sshAgentUi->generateButton, &QPushButton::clicked, this, &EditEntryWidget::generatePrivateKey);
 
     connect(m_attachments.data(), &EntryAttachments::modified,
             this, &EditEntryWidget::updateSSHAgentAttachments);
@@ -563,6 +594,12 @@ void EditEntryWidget::updateSSHAgent()
     m_sshAgentSettings.reset();
     m_sshAgentSettings.fromEntry(m_entry);
     setSSHAgentSettings();
+
+    if (!m_pendingPrivateKey.isEmpty()) {
+        m_sshAgentSettings.setAttachmentName(m_pendingPrivateKey);
+        m_sshAgentSettings.setSelectedType("attachment");
+        m_pendingPrivateKey = "";
+    }
 
     updateSSHAgentAttachments();
 }
@@ -675,6 +712,13 @@ void EditEntryWidget::toKeeAgentSettings(KeeAgentSettings& settings) const
     settings.setSaveAttachmentToTempFile(m_sshAgentSettings.saveAttachmentToTempFile());
 }
 
+void EditEntryWidget::updateTotp()
+{
+    if (m_entry) {
+        m_attributesModel->setEntryAttributes(m_entry->attributes());
+    }
+}
+
 void EditEntryWidget::browsePrivateKey()
 {
     auto fileName = fileDialog()->getOpenFileName(this, tr("Select private key"), FileDialog::getLastDir("sshagent"));
@@ -766,12 +810,44 @@ void EditEntryWidget::copyPublicKey()
 {
     clipboard()->setText(m_sshAgentUi->publicKeyEdit->document()->toPlainText());
 }
+
+void EditEntryWidget::generatePrivateKey()
+{
+    auto dialog = new OpenSSHKeyGenDialog(this);
+
+    OpenSSHKey key;
+    dialog->setKey(&key);
+
+    if (dialog->exec()) {
+        // derive openssh naming from type
+        QString keyPrefix = key.type();
+        if (keyPrefix.startsWith("ecdsa")) {
+            keyPrefix = "id_ecdsa";
+        } else {
+            keyPrefix.replace("ssh-", "id_");
+        }
+
+        for (int i = 0; i < 10; i++) {
+            QString keyName = keyPrefix;
+
+            if (i > 0) {
+                keyName += "." + QString::number(i);
+            }
+
+            if (!m_entry->attachments()->hasKey(keyName)) {
+                m_pendingPrivateKey = keyName;
+                m_entry->attachments()->set(m_pendingPrivateKey, key.privateKey().toUtf8());
+                break;
+            }
+        }
+    }
+}
 #endif
 
 void EditEntryWidget::useExpiryPreset(QAction* action)
 {
     m_mainUi->expireCheck->setChecked(true);
-    TimeDelta delta = action->data().value<TimeDelta>();
+    auto delta = action->data().value<TimeDelta>();
     QDateTime now = Clock::currentDateTime();
     QDateTime expiryDateTime = now + delta;
     m_mainUi->expireDatePicker->setDateTime(expiryDateTime);
@@ -780,7 +856,7 @@ void EditEntryWidget::useExpiryPreset(QAction* action)
 void EditEntryWidget::toggleHideNotes(bool visible)
 {
     m_mainUi->notesEdit->setVisible(visible);
-    m_mainUi->notesHint->setVisible(!visible);
+    m_mainUi->revealNotesButton->setIcon(icons()->onOffIcon("password-show", visible));
 }
 
 Entry* EditEntryWidget::currentEntry() const
@@ -799,8 +875,6 @@ void EditEntryWidget::loadEntry(Entry* entry,
     m_create = create;
     m_history = history;
 
-    connect(m_entry, &Entry::modified, this, [this] { m_entryModifiedTimer.start(); });
-
     if (history) {
         setHeadline(QString("%1 \u2022 %2").arg(parentName, tr("Entry history")));
     } else {
@@ -808,6 +882,8 @@ void EditEntryWidget::loadEntry(Entry* entry,
             setHeadline(QString("%1 \u2022 %2").arg(parentName, tr("Add entry")));
         } else {
             setHeadline(QString("%1 \u2022 %2 \u2022 %3").arg(parentName, entry->title(), tr("Edit entry")));
+            // Reload entry details if changed outside of the edit dialog
+            connect(m_entry, &Entry::modified, this, [this] { m_entryModifiedTimer.start(); });
         }
     }
 
@@ -835,12 +911,14 @@ void EditEntryWidget::setForms(Entry* entry, bool restore)
     m_mainUi->usernameComboBox->lineEdit()->setReadOnly(m_history);
     m_mainUi->urlEdit->setReadOnly(m_history);
     m_mainUi->passwordEdit->setReadOnly(m_history);
+    m_mainUi->tagsList->tags(entry->tagList());
+    m_mainUi->tagsList->completion(m_db->tagList());
     m_mainUi->expireCheck->setEnabled(!m_history);
     m_mainUi->expireDatePicker->setReadOnly(m_history);
-    m_mainUi->notesEnabled->setChecked(!config()->get(Config::Security_HideNotes).toBool());
+    m_mainUi->revealNotesButton->setIcon(icons()->onOffIcon("password-show", false));
+    m_mainUi->revealNotesButton->setVisible(config()->get(Config::Security_HideNotes).toBool());
     m_mainUi->notesEdit->setReadOnly(m_history);
     m_mainUi->notesEdit->setVisible(!config()->get(Config::Security_HideNotes).toBool());
-    m_mainUi->notesHint->setVisible(config()->get(Config::Security_HideNotes).toBool());
     if (config()->get(Config::GUI_MonospaceNotes).toBool()) {
         m_mainUi->notesEdit->setFont(Font::fixedFont());
     } else {
@@ -941,34 +1019,55 @@ void EditEntryWidget::setForms(Entry* entry, bool restore)
             setupBrowser();
         }
 
-        if (m_customData->contains(BrowserService::OPTION_SKIP_AUTO_SUBMIT)) {
-            // clang-format off
-            m_browserUi->skipAutoSubmitCheckbox->setChecked(m_customData->value(BrowserService::OPTION_SKIP_AUTO_SUBMIT) == TRUE_STR);
-            // clang-format on
-        } else {
-            m_browserUi->skipAutoSubmitCheckbox->setChecked(false);
+        auto hideEntriesCheckBoxEnabled = true;
+        auto skipAutoSubmitCheckBoxEnabled = true;
+        auto onlyHttpAuthCheckBoxEnabled = true;
+        auto notHttpAuthCheckBoxEnabled = true;
+        auto hideEntries = false;
+        auto skipAutoSubmit = false;
+        auto onlyHttpAuth = false;
+        auto notHttpAuth = false;
+
+        const auto group = m_entry->group();
+        if (group) {
+            hideEntries = group->resolveCustomDataTriState(BrowserService::OPTION_HIDE_ENTRY) == Group::Enable;
+            skipAutoSubmit = group->resolveCustomDataTriState(BrowserService::OPTION_SKIP_AUTO_SUBMIT) == Group::Enable;
+            onlyHttpAuth = group->resolveCustomDataTriState(BrowserService::OPTION_ONLY_HTTP_AUTH) == Group::Enable;
+            notHttpAuth = group->resolveCustomDataTriState(BrowserService::OPTION_NOT_HTTP_AUTH) == Group::Enable;
+
+            hideEntriesCheckBoxEnabled =
+                group->resolveCustomDataTriState(BrowserService::OPTION_HIDE_ENTRY) == Group::Inherit;
+            skipAutoSubmitCheckBoxEnabled =
+                group->resolveCustomDataTriState(BrowserService::OPTION_SKIP_AUTO_SUBMIT) == Group::Inherit;
+            onlyHttpAuthCheckBoxEnabled =
+                group->resolveCustomDataTriState(BrowserService::OPTION_ONLY_HTTP_AUTH) == Group::Inherit;
+            notHttpAuthCheckBoxEnabled =
+                group->resolveCustomDataTriState(BrowserService::OPTION_NOT_HTTP_AUTH) == Group::Inherit;
         }
 
-        if (m_customData->contains(BrowserService::OPTION_HIDE_ENTRY)) {
-            m_browserUi->hideEntryCheckbox->setChecked(m_customData->value(BrowserService::OPTION_HIDE_ENTRY)
-                                                       == TRUE_STR);
-        } else {
-            m_browserUi->hideEntryCheckbox->setChecked(false);
+        // Show information about group level settings
+        if (!hideEntriesCheckBoxEnabled || !skipAutoSubmitCheckBoxEnabled || !onlyHttpAuthCheckBoxEnabled
+            || !notHttpAuthCheckBoxEnabled) {
+            m_browserUi->messageWidget->showMessage(
+                tr("Some Browser Integration settings are overridden by group settings."), MessageWidget::Information);
+            m_browserUi->messageWidget->setVisible(true);
         }
 
-        if (m_customData->contains(BrowserService::OPTION_ONLY_HTTP_AUTH)) {
-            m_browserUi->onlyHttpAuthCheckbox->setChecked(m_customData->value(BrowserService::OPTION_ONLY_HTTP_AUTH)
-                                                          == TRUE_STR);
-        } else {
-            m_browserUi->onlyHttpAuthCheckbox->setChecked(false);
-        }
-
-        if (m_customData->contains(BrowserService::OPTION_NOT_HTTP_AUTH)) {
-            m_browserUi->notHttpAuthCheckbox->setChecked(m_customData->value(BrowserService::OPTION_NOT_HTTP_AUTH)
-                                                         == TRUE_STR);
-        } else {
-            m_browserUi->notHttpAuthCheckbox->setChecked(false);
-        }
+        // Disable checkboxes based on group level settings
+        updateBrowserIntegrationCheckbox(
+            m_browserUi->hideEntryCheckbox, hideEntriesCheckBoxEnabled, hideEntries, BrowserService::OPTION_HIDE_ENTRY);
+        updateBrowserIntegrationCheckbox(m_browserUi->skipAutoSubmitCheckbox,
+                                         skipAutoSubmitCheckBoxEnabled,
+                                         skipAutoSubmit,
+                                         BrowserService::OPTION_SKIP_AUTO_SUBMIT);
+        updateBrowserIntegrationCheckbox(m_browserUi->onlyHttpAuthCheckbox,
+                                         onlyHttpAuthCheckBoxEnabled,
+                                         onlyHttpAuth,
+                                         BrowserService::OPTION_ONLY_HTTP_AUTH);
+        updateBrowserIntegrationCheckbox(m_browserUi->notHttpAuthCheckbox,
+                                         notHttpAuthCheckBoxEnabled,
+                                         notHttpAuth,
+                                         BrowserService::OPTION_NOT_HTTP_AUTH);
 
         m_browserUi->addURLButton->setEnabled(!m_history);
         m_browserUi->removeURLButton->setEnabled(false);
@@ -986,7 +1085,7 @@ void EditEntryWidget::setForms(Entry* entry, bool restore)
     m_editWidgetProperties->setFields(entry->timeInfo(), entry->uuid());
 
     if (!m_history && !restore) {
-        m_historyModel->setEntries(entry->historyItems());
+        m_historyModel->setEntries(entry->historyItems(), entry);
         m_historyUi->historyView->sortByColumn(0, Qt::DescendingOrder);
     }
     if (m_historyModel->rowCount() > 0) {
@@ -1090,7 +1189,9 @@ bool EditEntryWidget::commitEntry()
         m_entry->endUpdate();
     }
 
-    m_historyModel->setEntries(m_entry->historyItems());
+    m_historyModel->setEntries(m_entry->historyItems(), m_entry);
+    setPageHidden(m_historyWidget, m_history || m_entry->historyItems().count() < 1);
+    m_advancedUi->attachmentsWidget->linkAttachments(m_entry->attachments());
 
     showMessage(tr("Entry updated successfully."), MessageWidget::Positive);
     setModified(false);
@@ -1118,6 +1219,7 @@ void EditEntryWidget::updateEntryData(Entry* entry) const
     entry->setPassword(m_mainUi->passwordEdit->text());
     entry->setExpires(m_mainUi->expireCheck->isChecked());
     entry->setExpiryTime(m_mainUi->expireDatePicker->dateTime().toUTC());
+    entry->setTags(m_mainUi->tagsList->tags().toSet().toList().join(";")); // remove repeated tags
 
     entry->setNotes(m_mainUi->notesEdit->toPlainText());
 
@@ -1161,6 +1263,28 @@ void EditEntryWidget::updateEntryData(Entry* entry) const
         m_sshAgentSettings.toEntry(entry);
     }
 #endif
+}
+
+void EditEntryWidget::updateBrowserIntegrationCheckbox(QCheckBox* checkBox,
+                                                       bool enabled,
+                                                       bool value,
+                                                       const QString& option)
+{
+    auto block = checkBox->signalsBlocked();
+    checkBox->blockSignals(true);
+
+    if (enabled) {
+        if (m_customData->contains(option)) {
+            checkBox->setChecked(m_customData->value(option) == TRUE_STR);
+        } else {
+            checkBox->setChecked(false);
+        }
+    } else {
+        checkBox->setChecked(value);
+    }
+    checkBox->setEnabled(enabled);
+
+    checkBox->blockSignals(block);
 }
 
 void EditEntryWidget::cancel()
@@ -1477,8 +1601,9 @@ void EditEntryWidget::showHistoryEntry()
 void EditEntryWidget::restoreHistoryEntry()
 {
     QModelIndex index = m_sortModel->mapToSource(m_historyUi->historyView->currentIndex());
-    if (index.isValid()) {
-        setForms(m_historyModel->entryFromIndex(index), true);
+    auto entry = m_historyModel->entryFromIndex(index);
+    if (entry) {
+        setForms(entry, true);
         setModified(true);
     }
 }
@@ -1486,7 +1611,7 @@ void EditEntryWidget::restoreHistoryEntry()
 void EditEntryWidget::deleteHistoryEntry()
 {
     QModelIndex index = m_sortModel->mapToSource(m_historyUi->historyView->currentIndex());
-    if (index.isValid()) {
+    if (m_historyModel->entryFromIndex(index)) {
         m_historyModel->deleteIndex(index);
         if (m_historyModel->rowCount() > 0) {
             m_historyUi->deleteAllButton->setEnabled(true);
@@ -1507,13 +1632,15 @@ void EditEntryWidget::deleteAllHistoryEntries()
 QMenu* EditEntryWidget::createPresetsMenu()
 {
     auto* expirePresetsMenu = new QMenu(this);
-    expirePresetsMenu->addAction(tr("Tomorrow"))->setData(QVariant::fromValue(TimeDelta::fromDays(1)));
+    expirePresetsMenu->addAction(tr("%n hour(s)", nullptr, 12))->setData(QVariant::fromValue(TimeDelta::fromHours(12)));
+    expirePresetsMenu->addAction(tr("%n hour(s)", nullptr, 24))->setData(QVariant::fromValue(TimeDelta::fromHours(24)));
     expirePresetsMenu->addSeparator();
     expirePresetsMenu->addAction(tr("%n week(s)", nullptr, 1))->setData(QVariant::fromValue(TimeDelta::fromDays(7)));
     expirePresetsMenu->addAction(tr("%n week(s)", nullptr, 2))->setData(QVariant::fromValue(TimeDelta::fromDays(14)));
     expirePresetsMenu->addAction(tr("%n week(s)", nullptr, 3))->setData(QVariant::fromValue(TimeDelta::fromDays(21)));
     expirePresetsMenu->addSeparator();
     expirePresetsMenu->addAction(tr("%n month(s)", nullptr, 1))->setData(QVariant::fromValue(TimeDelta::fromMonths(1)));
+    expirePresetsMenu->addAction(tr("%n month(s)", nullptr, 2))->setData(QVariant::fromValue(TimeDelta::fromMonths(2)));
     expirePresetsMenu->addAction(tr("%n month(s)", nullptr, 3))->setData(QVariant::fromValue(TimeDelta::fromMonths(3)));
     expirePresetsMenu->addAction(tr("%n month(s)", nullptr, 6))->setData(QVariant::fromValue(TimeDelta::fromMonths(6)));
     expirePresetsMenu->addSeparator();

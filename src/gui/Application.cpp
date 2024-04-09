@@ -35,7 +35,7 @@
 #include <QStandardPaths>
 
 #if defined(Q_OS_UNIX)
-#include <signal.h>
+#include <csignal>
 #include <sys/socket.h>
 #include <unistd.h>
 #endif
@@ -147,9 +147,9 @@ Application::~Application()
  * configuration OS security properties, and loading translators.
  * A QApplication object has to be instantiated before calling this function.
  */
-void Application::bootstrap()
+void Application::bootstrap(const QString& uiLanguage)
 {
-    Bootstrap::bootstrap();
+    Bootstrap::bootstrap(uiLanguage);
 
 #ifdef Q_OS_WIN
     // Qt on Windows uses "MS Shell Dlg 2" as the default font for many widgets, which resolves
@@ -183,6 +183,7 @@ void Application::applyTheme()
         auto* s = new LightStyle;
         setPalette(s->standardPalette());
         setStyle(s);
+        m_darkTheme = false;
     } else if (appTheme == "dark") {
         auto* s = new DarkStyle;
         setPalette(s->standardPalette());
@@ -191,7 +192,9 @@ void Application::applyTheme()
     } else {
         // Classic mode, don't check for dark theme on Windows
         // because Qt 5.x does not support it
-#ifndef Q_OS_WIN
+#if defined(Q_OS_WIN)
+        m_darkTheme = false;
+#else
         m_darkTheme = osUtils->isDarkMode();
 #endif
         QFile stylesheetFile(":/styles/base/classicstyle.qss");
@@ -281,7 +284,7 @@ void Application::processIncomingConnection()
 
 void Application::socketReadyRead()
 {
-    QLocalSocket* socket = qobject_cast<QLocalSocket*>(sender());
+    auto socket = qobject_cast<QLocalSocket*>(sender());
     if (!socket) {
         return;
     }

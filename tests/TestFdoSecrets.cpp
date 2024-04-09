@@ -69,7 +69,7 @@ void TestFdoSecrets::testSpecialCharsInAttributeValue()
     e2->setTitle("titleB");
     e2->attributes()->set("testAttribute", "Abc:*+.-");
 
-    // search for custom entries via programatic API
+    // search for custom entries via programmatic API
     {
         const auto term = Collection::attributeToTerm("testAttribute", "OAuth::[test.name@gmail.com]");
         const auto res = EntrySearcher().search({term}, root.data());
@@ -81,6 +81,11 @@ void TestFdoSecrets::testSpecialCharsInAttributeValue()
         const auto res = EntrySearcher().search({term}, root.data());
         QCOMPARE(res.count(), 1);
         QCOMPARE(res[0]->title(), QStringLiteral("titleB"));
+    }
+    {
+        const auto term = Collection::attributeToTerm("testAttribute", "v|");
+        const auto res = EntrySearcher().search({term}, root.data());
+        QCOMPARE(res.count(), 0);
     }
 }
 

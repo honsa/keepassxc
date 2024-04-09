@@ -54,6 +54,7 @@ ShareObserver::ShareObserver(QSharedPointer<Database> db, QObject* parent)
 
 ShareObserver::~ShareObserver()
 {
+    m_db->disconnect(this);
 }
 
 void ShareObserver::deinitialize()
@@ -278,13 +279,14 @@ QList<ShareObserver::Result> ShareObserver::exportShares()
     }
 
     for (auto it = references.cbegin(); it != references.cend(); ++it) {
-        const auto& reference = it.value().first();
+        auto reference = it.value().first();
         const QString resolvedPath = resolvePath(reference.config.path, m_db);
         auto watcher = m_fileWatchers.value(resolvedPath);
         if (watcher) {
             watcher->stop();
         }
 
+        // TODO: save new path into group settings if not saving to signed container anymore
         results << ShareExport::intoContainer(resolvedPath, reference.config, reference.group);
 
         if (watcher) {

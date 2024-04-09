@@ -33,7 +33,8 @@ bool SymmetricCipher::init(Mode mode, Direction direction, const QByteArray& key
 
     try {
         auto botanMode = modeToString(mode);
-        auto botanDirection = (direction == SymmetricCipher::Encrypt ? Botan::ENCRYPTION : Botan::DECRYPTION);
+        auto botanDirection =
+            (direction == SymmetricCipher::Encrypt ? Botan::Cipher_Dir::ENCRYPTION : Botan::Cipher_Dir::DECRYPTION);
 
         auto cipher = Botan::Cipher_Mode::create_or_throw(botanMode.toStdString(), botanDirection);
         m_cipher.reset(cipher.release());
@@ -176,6 +177,8 @@ SymmetricCipher::Mode SymmetricCipher::stringToMode(const QString& cipher)
         return Aes128_CTR;
     } else if (cipher.compare("aes-256-ctr", cs) == 0 || cipher.compare("aes256-ctr", cs) == 0) {
         return Aes256_CTR;
+    } else if (cipher.compare("aes-256-gcm", cs) == 0 || cipher.compare("aes256-gcm", cs) == 0) {
+        return Aes256_GCM;
     } else if (cipher.startsWith("twofish", cs)) {
         return Twofish_CBC;
     } else if (cipher.startsWith("salsa", cs)) {
@@ -198,6 +201,8 @@ QString SymmetricCipher::modeToString(const Mode mode)
         return QStringLiteral("CTR(AES-128)");
     case Aes256_CTR:
         return QStringLiteral("CTR(AES-256)");
+    case Aes256_GCM:
+        return QStringLiteral("AES-256/GCM");
     case Twofish_CBC:
         return QStringLiteral("Twofish/CBC");
     case Salsa20:
@@ -217,6 +222,7 @@ int SymmetricCipher::defaultIvSize(Mode mode)
     case Aes256_CBC:
     case Aes128_CTR:
     case Aes256_CTR:
+    case Aes256_GCM:
     case Twofish_CBC:
         return 16;
     case Salsa20:
@@ -235,6 +241,7 @@ int SymmetricCipher::keySize(Mode mode)
         return 16;
     case Aes256_CBC:
     case Aes256_CTR:
+    case Aes256_GCM:
     case Twofish_CBC:
     case Salsa20:
     case ChaCha20:
@@ -249,6 +256,7 @@ int SymmetricCipher::blockSize(Mode mode)
     switch (mode) {
     case Aes128_CBC:
     case Aes256_CBC:
+    case Aes256_GCM:
     case Twofish_CBC:
         return 16;
     case Aes128_CTR:
@@ -256,6 +264,25 @@ int SymmetricCipher::blockSize(Mode mode)
     case Salsa20:
     case ChaCha20:
         return 1;
+    default:
+        return 0;
+    }
+}
+
+int SymmetricCipher::ivSize(Mode mode)
+{
+    switch (mode) {
+    case Aes128_CBC:
+    case Aes256_CBC:
+    case Aes128_CTR:
+    case Aes256_CTR:
+    case Twofish_CBC:
+        return 16;
+    case Aes256_GCM:
+        return 12;
+    case Salsa20:
+    case ChaCha20:
+        return 8;
     default:
         return 0;
     }

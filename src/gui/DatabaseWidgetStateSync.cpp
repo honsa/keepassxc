@@ -26,25 +26,28 @@ DatabaseWidgetStateSync::DatabaseWidgetStateSync(QObject* parent)
     , m_activeDbWidget(nullptr)
     , m_blockUpdates(false)
 {
-    m_mainSplitterSizes = variantToIntList(config()->get(Config::GUI_SplitterState));
-    m_previewSplitterSizes = variantToIntList(config()->get(Config::GUI_PreviewSplitterState));
+    m_splitterSizes = {
+        {Config::GUI_SplitterState, variantToIntList(config()->get(Config::GUI_SplitterState))},
+        {Config::GUI_PreviewSplitterState, variantToIntList(config()->get(Config::GUI_PreviewSplitterState))},
+        {Config::GUI_GroupSplitterState, variantToIntList(config()->get(Config::GUI_GroupSplitterState))}};
     m_listViewState = config()->get(Config::GUI_ListViewState).toByteArray();
     m_searchViewState = config()->get(Config::GUI_SearchViewState).toByteArray();
 
     connect(qApp, &QCoreApplication::aboutToQuit, this, &DatabaseWidgetStateSync::sync);
 }
 
-DatabaseWidgetStateSync::~DatabaseWidgetStateSync()
-{
-}
+DatabaseWidgetStateSync::~DatabaseWidgetStateSync() = default;
 
 /**
  * Sync state with persistent storage.
  */
 void DatabaseWidgetStateSync::sync()
 {
-    config()->set(Config::GUI_SplitterState, intListToVariant(m_mainSplitterSizes));
-    config()->set(Config::GUI_PreviewSplitterState, intListToVariant(m_previewSplitterSizes));
+    config()->set(Config::GUI_SplitterState, intListToVariant(m_splitterSizes.value(Config::GUI_SplitterState)));
+    config()->set(Config::GUI_PreviewSplitterState,
+                  intListToVariant(m_splitterSizes.value(Config::GUI_PreviewSplitterState)));
+    config()->set(Config::GUI_GroupSplitterState,
+                  intListToVariant(m_splitterSizes.value(Config::GUI_GroupSplitterState)));
     config()->set(Config::GUI_ListViewState, m_listViewState);
     config()->set(Config::GUI_SearchViewState, m_searchViewState);
     config()->sync();
@@ -61,13 +64,7 @@ void DatabaseWidgetStateSync::setActive(DatabaseWidget* dbWidget)
     if (m_activeDbWidget) {
         m_blockUpdates = true;
 
-        if (!m_mainSplitterSizes.isEmpty()) {
-            m_activeDbWidget->setMainSplitterSizes(m_mainSplitterSizes);
-        }
-
-        if (!m_previewSplitterSizes.isEmpty()) {
-            m_activeDbWidget->setPreviewSplitterSizes(m_previewSplitterSizes);
-        }
+        m_activeDbWidget->setSplitterSizes(m_splitterSizes);
 
         if (m_activeDbWidget->isSearchActive()) {
             restoreSearchView();
@@ -77,8 +74,7 @@ void DatabaseWidgetStateSync::setActive(DatabaseWidget* dbWidget)
 
         m_blockUpdates = false;
 
-        connect(m_activeDbWidget, SIGNAL(mainSplitterSizesChanged()), SLOT(updateSplitterSizes()));
-        connect(m_activeDbWidget, SIGNAL(previewSplitterSizesChanged()), SLOT(updateSplitterSizes()));
+        connect(m_activeDbWidget, SIGNAL(splitterSizesChanged()), SLOT(updateSplitterSizes()));
         connect(m_activeDbWidget, SIGNAL(entryViewStateChanged()), SLOT(updateViewState()));
         connect(m_activeDbWidget, SIGNAL(listModeActivated()), SLOT(restoreListView()));
         connect(m_activeDbWidget, SIGNAL(searchModeActivated()), SLOT(restoreSearchView()));
@@ -138,12 +134,9 @@ void DatabaseWidgetStateSync::blockUpdates()
 
 void DatabaseWidgetStateSync::updateSplitterSizes()
 {
-    if (m_blockUpdates) {
-        return;
+    if (!m_blockUpdates) {
+        m_splitterSizes = m_activeDbWidget->splitterSizes();
     }
-
-    m_mainSplitterSizes = m_activeDbWidget->mainSplitterSizes();
-    m_previewSplitterSizes = m_activeDbWidget->previewSplitterSizes();
 }
 
 /**
@@ -164,6 +157,8 @@ void DatabaseWidgetStateSync::updateViewState()
     } else {
         m_listViewState = m_activeDbWidget->entryViewState();
     }
+
+    sync();
 }
 
 QList<int> DatabaseWidgetStateSync::variantToIntList(const QVariant& variant)

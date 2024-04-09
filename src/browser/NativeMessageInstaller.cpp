@@ -1,6 +1,6 @@
 /*
  *  Copyright (C) 2017 Sami Vänttinen <sami.vanttinen@protonmail.com>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2021 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -28,6 +28,7 @@
 #include <QJsonObject>
 #include <QMessageBox>
 #include <QProcessEnvironment>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStandardPaths>
 
@@ -70,7 +71,7 @@ namespace
     const QString TARGET_DIR_TOR_BROWSER = QStringLiteral(
         "/torbrowser/tbb/x86_64/tor-browser_en-US/Browser/TorBrowser/Data/Browser/.mozilla/native-messaging-hosts");
     const QString TARGET_DIR_BRAVE = QStringLiteral("/BraveSoftware/Brave-Browser/NativeMessagingHosts");
-    const QString TARGET_DIR_EDGE = QStringLiteral("/microsoftedge/NativeMessagingHosts");
+    const QString TARGET_DIR_EDGE = QStringLiteral("/microsoft-edge/NativeMessagingHosts");
 #endif
 } // namespace
 
@@ -214,12 +215,20 @@ QString NativeMessageInstaller::getNativeMessagePath(SupportedBrowsers browser) 
         basePath = QStandardPaths::writableLocation(QStandardPaths::DataLocation);
     }
     return QStringLiteral("%1/%2_%3.json").arg(basePath, HOST_NAME, getBrowserName(browser));
-#elif defined(Q_OS_LINUX)
+#elif defined(KEEPASSXC_DIST_FLATPAK)
+    // Flatpak sandboxes do not have access to the XDG_DATA_HOME and XDG_CONFIG_HOME variables
+    // defined in the host, so we must hardcode them here.
     if (browser == SupportedBrowsers::TOR_BROWSER) {
-        // Tor Browser launcher stores its config in ~/.local/share/...
+        basePath = QDir::homePath() + "/.local/share";
+    } else if (browser == SupportedBrowsers::FIREFOX) {
+        basePath = QDir::homePath();
+    } else {
+        basePath = QDir::homePath() + "/.config";
+    }
+#elif defined(Q_OS_LINUX) || (defined(Q_OS_UNIX) && !defined(Q_OS_MACOS))
+    if (browser == SupportedBrowsers::TOR_BROWSER) {
         basePath = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
     } else if (browser == SupportedBrowsers::FIREFOX) {
-        // Firefox stores its config in ~/
         basePath = QDir::homePath();
     } else {
         basePath = QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
@@ -234,21 +243,58 @@ QString NativeMessageInstaller::getNativeMessagePath(SupportedBrowsers browser) 
     return QStringLiteral("%1%2/%3.json").arg(basePath, getTargetPath(browser), HOST_NAME);
 }
 
-/**
- * Gets the path to keepassxc-proxy binary
+#ifdef KEEPASSXC_DIST_FLATPAK
+/** Constructs a host accessible proxy path for use with flatpak
  *
- * @param location Custom proxy path
- * @return path Path to keepassxc-proxy
+ * @return path Path to host accessible wrapper script (org.keepassxc.KeePassXC)
+ */
+QString constructFlatpakPath()
+{
+    // Find and extract the host flatpak data directory (in /var)
+    QString path;
+    QSettings settings("/.flatpak-info", QSettings::IniFormat);
+    settings.beginGroup("Instance");
+    QString appPath = settings.value("app-path").toString();
+
+    QRegularExpression re("^((?:/[\\.\\w-]*)+)+/app");
+    QRegularExpressionMatch match = re.match(appPath);
+    if (match.hasMatch()) {
+        // Construct a proxy path that should work with all flatpak installations
+        path = match.captured(1) + "/exports/bin/" + "org.keepassxc.KeePassXC";
+    } else {
+        // Fallback to the most common and default flatpak installation path
+        path = "/var/lib/flatpak/exports/bin/org.keepassxc.KeePassXC";
+    }
+    settings.endGroup();
+
+    return path;
+}
+#endif
+
+/**
+ * Returns the effective proxy path used to build the native messaging JSON script
  */
 QString NativeMessageInstaller::getProxyPath() const
 {
+    QString result;
     if (browserSettings()->useCustomProxy()) {
-        return browserSettings()->customProxyLocation();
+        result = browserSettings()->customProxyLocation();
+    } else {
+        result = getInstalledProxyPath();
     }
+    return result;
+}
 
+/**
+ * Returns the original proxy path at the time of installation
+ */
+QString NativeMessageInstaller::getInstalledProxyPath() const
+{
     QString path;
-#ifdef KEEPASSXC_DIST_APPIMAGE
+#if defined(KEEPASSXC_DIST_APPIMAGE)
     path = QProcessEnvironment::systemEnvironment().value("APPIMAGE");
+#elif defined(KEEPASSXC_DIST_FLATPAK)
+    path = constructFlatpakPath();
 #else
     path = QCoreApplication::applicationDirPath() + QStringLiteral("/keepassxc-proxy");
 #ifdef Q_OS_WIN

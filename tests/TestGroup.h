@@ -1,6 +1,6 @@
 /*
+ *  Copyright (C) 2023 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2010 Felix Geyer <debfx@fobos.de>
- *  Copyright (C) 2017 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -47,7 +47,9 @@ private slots:
     void testHierarchy();
     void testApplyGroupIconRecursively();
     void testUsernamesRecursive();
-    void testMove();
+    void testMoveUpDown();
+    void testPreviousParentGroup();
+    void testAutoTypeState();
 };
 
 #endif // KEEPASSX_TESTGROUP_H

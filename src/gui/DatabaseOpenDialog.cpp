@@ -35,7 +35,12 @@ DatabaseOpenDialog::DatabaseOpenDialog(QWidget* parent)
     , m_tabBar(new QTabBar(this))
 {
     setWindowTitle(tr("Unlock Database - KeePassXC"));
-    setWindowFlags(Qt::Dialog | Qt::WindowStaysOnTopHint);
+    setWindowFlags(Qt::Dialog);
+    setWindowFlag(Qt::WindowContextHelpButtonHint, false);
+#ifdef Q_OS_LINUX
+    // Linux requires this to overcome some Desktop Environments (also no Quick Unlock)
+    setWindowFlags(windowFlags() | Qt::WindowStaysOnTopHint);
+#endif
     // block input to the main window/application while the dialog is open
     setWindowModality(Qt::ApplicationModal);
 #ifdef Q_OS_WIN
@@ -55,13 +60,34 @@ DatabaseOpenDialog::DatabaseOpenDialog(QWidget* parent)
     setLayout(layout);
     setMinimumWidth(700);
 
-    // set up Ctrl+PageUp and Ctrl+PageDown shortcuts to cycle tabs
+    // set up Ctrl+PageUp / Ctrl+PageDown and Ctrl+Tab / Ctrl+Shift+Tab shortcuts to cycle tabs
+    // Ctrl+Tab is broken on Mac, so use Alt (i.e. the Option key) - https://bugreports.qt.io/browse/QTBUG-8596
+    auto dbTabModifier = Qt::CTRL;
+#ifdef Q_OS_MACOS
+    dbTabModifier = Qt::ALT;
+#endif
     auto* shortcut = new QShortcut(Qt::CTRL + Qt::Key_PageUp, this);
+    shortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(shortcut, &QShortcut::activated, this, [this]() { selectTabOffset(-1); });
+    shortcut = new QShortcut(dbTabModifier + Qt::SHIFT + Qt::Key_Tab, this);
     shortcut->setContext(Qt::WidgetWithChildrenShortcut);
     connect(shortcut, &QShortcut::activated, this, [this]() { selectTabOffset(-1); });
     shortcut = new QShortcut(Qt::CTRL + Qt::Key_PageDown, this);
     shortcut->setContext(Qt::WidgetWithChildrenShortcut);
     connect(shortcut, &QShortcut::activated, this, [this]() { selectTabOffset(1); });
+    shortcut = new QShortcut(dbTabModifier + Qt::Key_Tab, this);
+    shortcut->setContext(Qt::WidgetWithChildrenShortcut);
+    connect(shortcut, &QShortcut::activated, this, [this]() { selectTabOffset(1); });
+}
+
+void DatabaseOpenDialog::showEvent(QShowEvent* event)
+{
+    QDialog::showEvent(event);
+    QTimer::singleShot(100, this, [=] {
+        if (m_view->isOnQuickUnlockScreen() && !m_view->unlockingDatabase()) {
+            m_view->triggerQuickUnlock();
+        }
+    });
 }
 
 void DatabaseOpenDialog::selectTabOffset(int offset)

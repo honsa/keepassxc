@@ -37,23 +37,22 @@ WelcomeWidget::WelcomeWidget(QWidget* parent)
     m_ui->welcomeLabel->setFont(welcomeLabelFont);
 
     m_ui->iconLabel->setPixmap(icons()->applicationIcon().pixmap(64));
+    m_ui->buttonNewDatabase->setIcon(icons()->icon("document-new"));
+    m_ui->buttonOpenDatabase->setIcon(icons()->icon("document-open"));
+    m_ui->buttonImport->setIcon(icons()->icon("document-import"));
 
     refreshLastDatabases();
 
     connect(m_ui->buttonNewDatabase, SIGNAL(clicked()), SIGNAL(newDatabase()));
     connect(m_ui->buttonOpenDatabase, SIGNAL(clicked()), SIGNAL(openDatabase()));
-    connect(m_ui->buttonImportKeePass1, SIGNAL(clicked()), SIGNAL(importKeePass1Database()));
-    connect(m_ui->buttonImportOpVault, SIGNAL(clicked()), SIGNAL(importOpVaultDatabase()));
-    connect(m_ui->buttonImportCSV, SIGNAL(clicked()), SIGNAL(importCsv()));
+    connect(m_ui->buttonImport, SIGNAL(clicked()), SIGNAL(importFile()));
     connect(m_ui->recentListWidget,
             SIGNAL(itemActivated(QListWidgetItem*)),
             this,
             SLOT(openDatabaseFromFile(QListWidgetItem*)));
 }
 
-WelcomeWidget::~WelcomeWidget()
-{
-}
+WelcomeWidget::~WelcomeWidget() = default;
 
 void WelcomeWidget::openDatabaseFromFile(QListWidgetItem* item)
 {
@@ -82,7 +81,7 @@ void WelcomeWidget::refreshLastDatabases()
     m_ui->recentListWidget->clear();
     const QStringList lastDatabases = config()->get(Config::LastDatabases).toStringList();
     for (const QString& database : lastDatabases) {
-        QListWidgetItem* itm = new QListWidgetItem;
+        auto itm = new QListWidgetItem;
         itm->setText(database);
         m_ui->recentListWidget->addItem(itm);
     }

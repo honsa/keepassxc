@@ -21,6 +21,7 @@
 #include <QApplication>
 #include <QDebug>
 #include <QPluginLoader>
+#include <QRegularExpression>
 #include <QUrl>
 
 #include "config-keepassx.h"
@@ -72,19 +73,20 @@ namespace
                                                         {"multiply", Qt::Key_Asterisk},
                                                         {"divide", Qt::Key_Slash},
                                                         {"leftbrace", Qt::Key_BraceLeft},
-                                                        {"{", Qt::Key_BraceLeft},
+                                                        {"{", Qt::Key_unknown},
                                                         {"rightbrace", Qt::Key_BraceRight},
-                                                        {"}", Qt::Key_BraceRight},
+                                                        {"}", Qt::Key_unknown},
                                                         {"leftparen", Qt::Key_ParenLeft},
-                                                        {"(", Qt::Key_ParenLeft},
+                                                        {"(", Qt::Key_unknown},
                                                         {"rightparen", Qt::Key_ParenRight},
-                                                        {")", Qt::Key_ParenRight},
-                                                        {"[", Qt::Key_BracketLeft},
-                                                        {"]", Qt::Key_BracketRight},
-                                                        {"+", Qt::Key_Plus},
-                                                        {"%", Qt::Key_Percent},
-                                                        {"^", Qt::Key_AsciiCircum},
-                                                        {"~", Qt::Key_AsciiTilde},
+                                                        {")", Qt::Key_unknown},
+                                                        {"[", Qt::Key_unknown},
+                                                        {"]", Qt::Key_unknown},
+                                                        {"+", Qt::Key_unknown},
+                                                        {"%", Qt::Key_unknown},
+                                                        {"^", Qt::Key_unknown},
+                                                        {"~", Qt::Key_unknown},
+                                                        {"#", Qt::Key_unknown},
                                                         {"numpad0", Qt::Key_0},
                                                         {"numpad1", Qt::Key_1},
                                                         {"numpad2", Qt::Key_2},
@@ -122,7 +124,16 @@ AutoType::AutoType(QObject* parent, bool test)
     , m_executor(nullptr)
     , m_windowState(WindowState::Normal)
     , m_windowForGlobal(0)
+    , m_lastMatch(nullptr, QString())
+    , m_lastMatchRetypeTimer(nullptr)
 {
+    // configure timer to reset last match
+    m_lastMatchRetypeTimer.setSingleShot(true);
+    connect(&m_lastMatchRetypeTimer, &QTimer::timeout, this, [this] {
+        m_lastMatch = {nullptr, QString()};
+        emit autotypeRetypeTimeout();
+    });
+
     // prevent crash when the plugin has unresolved symbols
     m_pluginLoader->setLoadHints(QLibrary::ResolveAllSymbolsHint);
 
@@ -164,11 +175,14 @@ void AutoType::loadPlugin(const QString& pluginPath)
         if (m_plugin) {
             if (m_plugin->isAvailable()) {
                 m_executor = m_plugin->createExecutor();
-                connect(osUtils, &OSUtilsBase::globalShortcutTriggered, this, [this](const QString& name) {
-                    if (name == "autotype") {
-                        startGlobalAutoType();
-                    }
-                });
+                connect(osUtils,
+                        &OSUtilsBase::globalShortcutTriggered,
+                        this,
+                        [this](const QString& name, const QString& initialSearch) {
+                            if (name == "autotype") {
+                                startGlobalAutoType(initialSearch);
+                            }
+                        });
             } else {
                 unloadPlugin();
             }
@@ -212,7 +226,7 @@ void AutoType::createTestInstance()
 QStringList AutoType::windowTitles()
 {
     if (!m_plugin) {
-        return QStringList();
+        return {};
     }
 
     return m_plugin->windowTitles();
@@ -242,7 +256,10 @@ void AutoType::unregisterGlobalShortcut()
 /**
  * Core Autotype function that will execute actions
  */
-void AutoType::executeAutoTypeActions(const Entry* entry, QWidget* hideWindow, const QString& sequence, WId window)
+void AutoType::executeAutoTypeActions(const Entry* entry,
+                                      const QString& sequence,
+                                      WId window,
+                                      AutoTypeExecutor::Mode mode)
 {
     QString error;
     auto actions = parseSequence(sequence, entry, error);
@@ -262,7 +279,8 @@ void AutoType::executeAutoTypeActions(const Entry* entry, QWidget* hideWindow, c
         return;
     }
 
-    if (hideWindow) {
+    // Explicitly hide the main window if no target window is specified
+    if (window == 0) {
 #if defined(Q_OS_MACOS)
         // Check for accessibility permission
         if (!macUtils()->enableAccessibility()) {
@@ -277,22 +295,27 @@ void AutoType::executeAutoTypeActions(const Entry* entry, QWidget* hideWindow, c
         macUtils()->raiseLastActiveWindow();
         m_plugin->hideOwnWindow();
 #else
-        getMainWindow()->minimizeOrHide();
+        if (getMainWindow()) {
+            getMainWindow()->minimizeOrHide();
+        }
 #endif
+    } else {
+        // Restore window state (macOS only) then raise the target window
+        restoreWindowState();
+        QCoreApplication::processEvents();
+        m_plugin->raiseWindow(window);
     }
 
-    // Restore window state in case app stole focus
-    restoreWindowState();
-    QCoreApplication::processEvents();
-    m_plugin->raiseWindow(m_windowForGlobal);
-
-    // Used only for selected entry auto-type
-    if (!window) {
-        window = m_plugin->activeWindow();
-    }
+    // Restore executor mode
+    m_executor->mode = mode;
 
     int delay = qMax(100, config()->get(Config::AutoTypeStartDelay).toInt());
     Tools::wait(delay);
+
+    // Grab the current active window after everything settles
+    if (window == 0) {
+        window = m_plugin->activeWindow();
+    }
 
     for (const auto& action : asConst(actions)) {
         if (m_plugin->activeWindow() != window) {
@@ -313,7 +336,9 @@ void AutoType::executeAutoTypeActions(const Entry* entry, QWidget* hideWindow, c
             }
 
             if (!result.canRetry() || i == max_retries) {
-                MessageBox::critical(getMainWindow(), tr("Auto-Type Error"), result.errorString());
+                if (getMainWindow()) {
+                    MessageBox::critical(getMainWindow(), tr("Auto-Type Error"), result.errorString());
+                }
                 emit autotypeRejected();
                 m_inAutoType.unlock();
                 return;
@@ -332,9 +357,9 @@ void AutoType::executeAutoTypeActions(const Entry* entry, QWidget* hideWindow, c
 
 /**
  * Single Autotype entry-point function
- * Look up the Auto-Type sequence for the given entry then perfom Auto-Type in the active window
+ * Look up the Auto-Type sequence for the given entry then perform Auto-Type in the active window
  */
-void AutoType::performAutoType(const Entry* entry, QWidget* hideWindow)
+void AutoType::performAutoType(const Entry* entry)
 {
     if (!m_plugin) {
         return;
@@ -342,24 +367,24 @@ void AutoType::performAutoType(const Entry* entry, QWidget* hideWindow)
 
     auto sequences = entry->autoTypeSequences();
     if (!sequences.isEmpty()) {
-        executeAutoTypeActions(entry, hideWindow, sequences.first());
+        executeAutoTypeActions(entry, sequences.first());
     }
 }
 
 /**
  * Extra Autotype entry-point function
- * Perfom Auto-Type of the directly specified sequence in the active window
+ * Perform Auto-Type of the directly specified sequence in the active window
  */
-void AutoType::performAutoTypeWithSequence(const Entry* entry, const QString& sequence, QWidget* hideWindow)
+void AutoType::performAutoTypeWithSequence(const Entry* entry, const QString& sequence)
 {
     if (!m_plugin) {
         return;
     }
 
-    executeAutoTypeActions(entry, hideWindow, sequence);
+    executeAutoTypeActions(entry, sequence);
 }
 
-void AutoType::startGlobalAutoType()
+void AutoType::startGlobalAutoType(const QString& search)
 {
     // Never Auto-Type into KeePassXC itself
     if (qApp->focusWindow()) {
@@ -397,14 +422,14 @@ void AutoType::startGlobalAutoType()
     }
 #endif
 
-    emit globalAutoTypeTriggered();
+    emit globalAutoTypeTriggered(search);
 }
 
 /**
  * Global Autotype entry-point function
  * Perform global Auto-Type on the active window
  */
-void AutoType::performGlobalAutoType(const QList<QSharedPointer<Database>>& dbList)
+void AutoType::performGlobalAutoType(const QList<QSharedPointer<Database>>& dbList, const QString& search)
 {
     if (!m_plugin) {
         return;
@@ -447,13 +472,26 @@ void AutoType::performGlobalAutoType(const QList<QSharedPointer<Database>>& dbLi
         getMainWindow()->closeModalWindow();
 
         auto* selectDialog = new AutoTypeSelectDialog();
-        selectDialog->setMatches(matchList, dbList);
+        selectDialog->setMatches(matchList, dbList, m_lastMatch);
+
+        if (!search.isEmpty()) {
+            selectDialog->setSearchString(search);
+        }
 
         connect(getMainWindow(), &MainWindow::databaseLocked, selectDialog, &AutoTypeSelectDialog::reject);
-        connect(selectDialog, &AutoTypeSelectDialog::matchActivated, this, [this](const AutoTypeMatch& match) {
-            executeAutoTypeActions(match.first, nullptr, match.second, m_windowForGlobal);
-            resetAutoTypeState();
-        });
+        connect(selectDialog,
+                &AutoTypeSelectDialog::matchActivated,
+                this,
+                [this](const AutoTypeMatch& match, bool virtualMode) {
+                    m_lastMatch = match;
+                    m_lastMatchRetypeTimer.start(config()->get(Config::GlobalAutoTypeRetypeTime).toInt() * 1000);
+                    executeAutoTypeActions(match.first,
+                                           match.second,
+                                           m_windowForGlobal,
+                                           virtualMode ? AutoTypeExecutor::Mode::VIRTUAL
+                                                       : AutoTypeExecutor::Mode::NORMAL);
+                    resetAutoTypeState();
+                });
         connect(selectDialog, &QDialog::rejected, this, [this] {
             restoreWindowState();
             resetAutoTypeState();
@@ -469,7 +507,7 @@ void AutoType::performGlobalAutoType(const QList<QSharedPointer<Database>>& dbLi
         selectDialog->activateWindow();
     } else if (!matchList.isEmpty()) {
         // Only one match and not asking, do it!
-        executeAutoTypeActions(matchList.first().first, nullptr, matchList.first().second, m_windowForGlobal);
+        executeAutoTypeActions(matchList.first().first, matchList.first().second, m_windowForGlobal);
         resetAutoTypeState();
     } else {
         // We should never get here
@@ -535,7 +573,7 @@ AutoType::parseSequence(const QString& entrySequence, const Entry* entry, QStrin
     // Group 3 = inner placeholder (allows nested placeholders)
     // Group 4 = repeat (opt)
     // Group 5 = character
-    QRegularExpression regex("([+%^]*)({((?>[^{}]+?|(?2))+?)(?:\\s+(\\d+))?})|(.)");
+    QRegularExpression regex("([+%^#]*)(?:({((?>[^{}]+?|(?2))+?)(?:\\s+(\\d+))?})|(.))");
     auto results = regex.globalMatch(sequence);
     while (results.hasNext()) {
         auto match = results.next();
@@ -550,6 +588,9 @@ AutoType::parseSequence(const QString& entrySequence, const Entry* entry, QStrin
         }
         if (match.captured(1).contains('%')) {
             modifiers |= Qt::AltModifier;
+        }
+        if (match.captured(1).contains('#')) {
+            modifiers |= Qt::MetaModifier;
         }
 
         const auto fullPlaceholder = match.captured(2);
@@ -574,7 +615,12 @@ AutoType::parseSequence(const QString& entrySequence, const Entry* entry, QStrin
                 error = tr("Too many repetitions detected, max is %1: %2").arg(maxRepetition).arg(fullPlaceholder);
                 return {};
             }
-            auto action = QSharedPointer<AutoTypeKey>::create(g_placeholderToKey[placeholder], modifiers);
+            QSharedPointer<AutoTypeKey> action;
+            if (g_placeholderToKey[placeholder] == Qt::Key_unknown) {
+                action = QSharedPointer<AutoTypeKey>::create(placeholder[0], modifiers);
+            } else {
+                action = QSharedPointer<AutoTypeKey>::create(g_placeholderToKey[placeholder], modifiers);
+            }
             for (int i = 1; i <= repeat && i <= maxRepetition; ++i) {
                 actions << action;
             }
@@ -602,13 +648,26 @@ AutoType::parseSequence(const QString& entrySequence, const Entry* entry, QStrin
             for (const auto& ch : totp) {
                 actions << QSharedPointer<AutoTypeKey>::create(ch);
             }
-        } else if (placeholder == "pickchars") {
-            // Ignore this if we are syntax checking
+        } else if (placeholder.startsWith("pickchars")) {
+            // Reset to the original capture to preserve case
+            placeholder = match.captured(3);
+
+            auto attribute = EntryAttributes::PasswordKey;
+            if (placeholder.contains(":")) {
+                attribute = placeholder.section(":", 1);
+                if (!entry->attributes()->hasKey(attribute)) {
+                    error = tr("Entry does not have attribute for PICKCHARS: %1").arg(attribute);
+                    return {};
+                }
+            }
+
+            // Bail out if we are just syntax checking
             if (syntaxOnly) {
                 continue;
             }
-            // Show pickchars dialog for entry's password
-            auto password = entry->resolvePlaceholder(entry->password());
+
+            // Show pickchars dialog for the desired attribute
+            auto password = entry->resolvePlaceholder(entry->attribute(attribute));
             if (!password.isEmpty()) {
                 PickcharsDialog pickcharsDialog(password);
                 if (pickcharsDialog.exec() == QDialog::Accepted && !pickcharsDialog.selectedChars().isEmpty()) {
@@ -695,8 +754,14 @@ AutoType::parseSequence(const QString& entrySequence, const Entry* entry, QStrin
                 error = tr("Invalid conversion syntax: %1").arg(fullPlaceholder);
                 return {};
             }
-        } else if (placeholder == "beep" || placeholder.startsWith("vkey") || placeholder.startsWith("appactivate")
-                   || placeholder.startsWith("c:")) {
+        } else if (placeholder.startsWith("mode=")) {
+            auto mode = AutoTypeExecutor::Mode::NORMAL;
+            if (placeholder.endsWith("virtual")) {
+                mode = AutoTypeExecutor::Mode::VIRTUAL;
+            }
+            actions << QSharedPointer<AutoTypeMode>::create(mode);
+        } else if (placeholder.startsWith("beep") || placeholder.startsWith("vkey")
+                   || placeholder.startsWith("appactivate") || placeholder.startsWith("c:")) {
             // Ignore these commands
         } else {
             // Attempt to resolve an entry attribute

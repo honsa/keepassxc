@@ -46,6 +46,7 @@ private slots:
     void testSearchEditEntry();
     void testAddEntry();
     void testPasswordEntryEntropy();
+    void testPasswordEntryEntropy_data();
     void testDicewareEntryEntropy();
     void testTotp();
     void testSearch();
@@ -57,17 +58,20 @@ private slots:
     void testSaveAs();
     void testSaveBackup();
     void testSave();
+    void testSaveBackupPath();
+    void testSaveBackupPath_data();
     void testDatabaseSettings();
-    void testKeePass1Import();
     void testDatabaseLocking();
     void testDragAndDropKdbxFiles();
     void testSortGroups();
     void testAutoType();
     void testTrayRestoreHide();
+    void testShortcutConfig();
 
 private:
     void addCannedEntries();
-    void checkDatabase(QString dbFileName = "");
+    void checkDatabase(const QString& filePath, const QString& expectedDbName);
+    void checkDatabase(const QString& filePath = {});
     void triggerAction(const QString& name);
     void dragAndDropGroup(const QModelIndex& sourceIndex,
                           const QModelIndex& targetIndex,
@@ -79,8 +83,11 @@ private:
                     QAbstractItemView* view,
                     Qt::MouseButton button,
                     Qt::KeyboardModifiers stateKey = 0);
+    void checkSaveDatabase();
+    void checkStatusBarText(const QString& textFragment);
 
     QScopedPointer<MainWindow> m_mainWindow;
+    QPointer<QLabel> m_statusBarLabel;
     QPointer<DatabaseTabWidget> m_tabWidget;
     QPointer<DatabaseWidget> m_dbWidget;
     QSharedPointer<Database> m_db;

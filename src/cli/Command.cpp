@@ -18,9 +18,14 @@
 #include "Add.h"
 #include "AddGroup.h"
 #include "Analyze.h"
+#include "AttachmentExport.h"
+#include "AttachmentImport.h"
+#include "AttachmentRemove.h"
 #include "Clip.h"
 #include "Close.h"
-#include "Create.h"
+#include "DatabaseCreate.h"
+#include "DatabaseEdit.h"
+#include "DatabaseInfo.h"
 #include "Diceware.h"
 #include "Edit.h"
 #include "Estimate.h"
@@ -29,7 +34,6 @@
 #include "Generate.h"
 #include "Help.h"
 #include "Import.h"
-#include "Info.h"
 #include "List.h"
 #include "Merge.h"
 #include "Move.h"
@@ -99,15 +103,13 @@ Command::Command()
     options.append(Command::QuietOption);
 }
 
-Command::~Command()
-{
-}
+Command::~Command() = default;
 
 QString Command::getDescriptionLine()
 {
     QString response = name;
     QString space(" ");
-    QString spaces = space.repeated(15 - name.length());
+    QString spaces = space.repeated(20 - name.length());
     response = response.append(spaces);
     response = response.append(description);
     response = response.append("\n");
@@ -164,10 +166,14 @@ namespace Commands
 
         s_commands.insert(QStringLiteral("add"), QSharedPointer<Command>(new Add()));
         s_commands.insert(QStringLiteral("analyze"), QSharedPointer<Command>(new Analyze()));
+        s_commands.insert(QStringLiteral("attachment-export"), QSharedPointer<Command>(new AttachmentExport()));
+        s_commands.insert(QStringLiteral("attachment-import"), QSharedPointer<Command>(new AttachmentImport()));
+        s_commands.insert(QStringLiteral("attachment-rm"), QSharedPointer<Command>(new AttachmentRemove()));
         s_commands.insert(QStringLiteral("clip"), QSharedPointer<Command>(new Clip()));
         s_commands.insert(QStringLiteral("close"), QSharedPointer<Command>(new Close()));
-        s_commands.insert(QStringLiteral("db-create"), QSharedPointer<Command>(new Create()));
-        s_commands.insert(QStringLiteral("db-info"), QSharedPointer<Command>(new Info()));
+        s_commands.insert(QStringLiteral("db-create"), QSharedPointer<Command>(new DatabaseCreate()));
+        s_commands.insert(QStringLiteral("db-edit"), QSharedPointer<Command>(new DatabaseEdit()));
+        s_commands.insert(QStringLiteral("db-info"), QSharedPointer<Command>(new DatabaseInfo()));
         s_commands.insert(QStringLiteral("diceware"), QSharedPointer<Command>(new Diceware()));
         s_commands.insert(QStringLiteral("edit"), QSharedPointer<Command>(new Edit()));
         s_commands.insert(QStringLiteral("estimate"), QSharedPointer<Command>(new Estimate()));

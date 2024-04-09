@@ -34,7 +34,7 @@ bool Kdbx3Reader::readDatabaseImpl(QIODevice* device,
                                    QSharedPointer<const CompositeKey> key,
                                    Database* db)
 {
-    Q_ASSERT(m_kdbxVersion <= KeePass2::FILE_VERSION_3_1);
+    Q_ASSERT((db->formatVersion() & KeePass2::FILE_VERSION_CRITICAL_MASK) <= KeePass2::FILE_VERSION_3);
 
     if (hasError()) {
         return false;
@@ -43,7 +43,7 @@ bool Kdbx3Reader::readDatabaseImpl(QIODevice* device,
     // check if all required headers were present
     if (m_masterSeed.isEmpty() || m_encryptionIV.isEmpty() || m_streamStartBytes.isEmpty()
         || m_protectedStreamKey.isEmpty() || db->cipher().isNull()) {
-        raiseError(tr("missing database headers"));
+        raiseError(tr("Missing database headers"));
         return false;
     }
 
@@ -120,7 +120,7 @@ bool Kdbx3Reader::readDatabaseImpl(QIODevice* device,
         return false;
     }
 
-    Q_ASSERT(!xmlReader.headerHash().isEmpty() || m_kdbxVersion < KeePass2::FILE_VERSION_3_1);
+    Q_ASSERT(!xmlReader.headerHash().isEmpty() || db->formatVersion() < KeePass2::FILE_VERSION_3_1);
 
     if (!xmlReader.headerHash().isEmpty()) {
         QByteArray headerHash = CryptoHash::hash(headerData, CryptoHash::Sha256);
@@ -147,7 +147,7 @@ bool Kdbx3Reader::readHeaderField(StoreDataStream& headerStream, Database* db)
     bool ok;
     auto fieldLen = Endian::readSizedInt<quint16>(&headerStream, KeePass2::BYTEORDER, &ok);
     if (!ok) {
-        raiseError(tr("Invalid header field length"));
+        raiseError(tr("Invalid header field length: field %1").arg(fieldID));
         return false;
     }
 
@@ -155,7 +155,10 @@ bool Kdbx3Reader::readHeaderField(StoreDataStream& headerStream, Database* db)
     if (fieldLen != 0) {
         fieldData = headerStream.read(fieldLen);
         if (fieldData.size() != fieldLen) {
-            raiseError(tr("Invalid header data length"));
+            raiseError(tr("Invalid header data length: field %1, %2 expected, %3 found")
+                           .arg(fieldID)
+                           .arg(fieldLen)
+                           .arg(fieldData.size()));
             return false;
         }
     }

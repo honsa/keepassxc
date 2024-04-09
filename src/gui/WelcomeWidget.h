@@ -32,16 +32,14 @@ class WelcomeWidget : public QWidget
 
 public:
     explicit WelcomeWidget(QWidget* parent = nullptr);
-    ~WelcomeWidget();
+    ~WelcomeWidget() override;
     void refreshLastDatabases();
 
 signals:
     void newDatabase();
     void openDatabase();
     void openDatabaseFile(QString);
-    void importKeePass1Database();
-    void importOpVaultDatabase();
-    void importCsv();
+    void importFile();
 
 protected:
     void keyPressEvent(QKeyEvent* event) override;

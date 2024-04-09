@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2020 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2024 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2011 Felix Geyer <debfx@fobos.de>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -21,6 +21,7 @@
 
 #include <QPointer>
 #include <QVariant>
+#include <QVector>
 
 class QSettings;
 
@@ -43,7 +44,9 @@ public:
         AutoSaveOnExit,
         AutoSaveNonDataChanges,
         BackupBeforeSave,
+        BackupFilePathPattern,
         UseAtomicSaves,
+        UseDirectWriteSaves,
         SearchLimitGroup,
         MinimizeOnOpenUrl,
         HideWindowOnCopy,
@@ -58,9 +61,10 @@ public:
         AutoTypeHideExpiredEntry,
         GlobalAutoTypeKey,
         GlobalAutoTypeModifiers,
+        GlobalAutoTypeRetypeTime,
         FaviconDownloadTimeout,
         UpdateCheckMessageShown,
-        UseTouchID,
+        DefaultDatabaseFileName,
 
         LastDatabases,
         LastKeyFiles,
@@ -72,7 +76,6 @@ public:
         GUI_Language,
         GUI_HideToolbar,
         GUI_MovableToolbar,
-        GUI_HideGroupsPanel,
         GUI_HidePreviewPanel,
         GUI_AlwaysOnTop,
         GUI_ToolButtonStyle,
@@ -83,12 +86,14 @@ public:
         GUI_MinimizeOnClose,
         GUI_HideUsernames,
         GUI_HidePasswords,
-        GUI_AdvancedSettings,
+        GUI_ColorPasswords,
         GUI_MonospaceNotes,
         GUI_ApplicationTheme,
         GUI_CompactMode,
         GUI_CheckForUpdates,
         GUI_CheckForUpdatesIncludeBetas,
+        GUI_ShowExpiredEntriesOnDatabaseUnlock,
+        GUI_ShowExpiredEntriesOnDatabaseUnlockOffsetDays,
 
         GUI_MainWindowGeometry,
         GUI_MainWindowState,
@@ -96,6 +101,7 @@ public:
         GUI_SearchViewState,
         GUI_PreviewSplitterState,
         GUI_SplitterState,
+        GUI_GroupSplitterState,
         GUI_AutoTypeSelectDialogSize,
         GUI_CheckForUpdatesNextCheck,
 
@@ -113,13 +119,13 @@ public:
         Security_PasswordsHidden,
         Security_PasswordEmptyPlaceholder,
         Security_HidePasswordPreviewPanel,
+        Security_HideTotpPreviewPanel,
         Security_AutoTypeAsk,
         Security_IconDownloadFallback,
-        Security_ResetTouchId,
-        Security_ResetTouchIdTimeout,
-        Security_ResetTouchIdScreenlock,
         Security_NoConfirmMoveEntryToRecycleBin,
         Security_EnableCopyOnDoubleClick,
+        Security_QuickUnlock,
+        Security_DatabasePasswordMinimumQuality,
 
         Browser_Enabled,
         Browser_ShowNotification,
@@ -130,6 +136,7 @@ public:
         Browser_UseCustomProxy,
         Browser_CustomProxyLocation,
         Browser_UpdateBinaryPath,
+        Browser_AllowGetDatabaseEntriesRequest,
         Browser_AllowExpiredCredentials,
         Browser_AlwaysAllowAccess,
         Browser_AlwaysAllowUpdate,
@@ -140,6 +147,7 @@ public:
         Browser_UseCustomBrowser,
         Browser_CustomBrowserType,
         Browser_CustomBrowserLocation,
+        Browser_AllowLocalhostWithPasskeys,
 #ifdef QT_DEBUG
         Browser_CustomExtensionId,
 #endif
@@ -148,11 +156,13 @@ public:
         SSHAgent_UseOpenSSH,
         SSHAgent_UsePageant,
         SSHAgent_AuthSockOverride,
+        SSHAgent_SecurityKeyProviderOverride,
 
         FdoSecrets_Enabled,
         FdoSecrets_ShowNotification,
         FdoSecrets_ConfirmDeleteItem,
         FdoSecrets_ConfirmAccessItem,
+        FdoSecrets_UnlockBeforeSearch,
 
         KeeShare_QuietSuccess,
         KeeShare_Own,
@@ -190,14 +200,24 @@ public:
         Deleted
     };
 
+    struct ShortcutEntry
+    {
+        QString name;
+        QString shortcut;
+    };
+
     ~Config() override;
     QVariant get(ConfigKey key);
+    QVariant getDefault(ConfigKey key);
     QString getFileName();
     void set(ConfigKey key, const QVariant& value);
     void remove(ConfigKey key);
     bool hasAccessError();
     void sync();
     void resetToDefaults();
+
+    QList<ShortcutEntry> getShortcuts() const;
+    void setShortcuts(const QList<ShortcutEntry>& shortcuts);
 
     static Config* instance();
     static void createConfigFromFile(const QString& configFileName, const QString& localConfigFileName = {});

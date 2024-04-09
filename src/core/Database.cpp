@@ -21,6 +21,7 @@
 #include "core/AsyncTask.h"
 #include "core/FileWatcher.h"
 #include "core/Group.h"
+#include "crypto/Random.h"
 #include "format/KdbxXmlReader.h"
 #include "format/KeePass2Reader.h"
 #include "format/KeePass2Writer.h"
@@ -31,6 +32,10 @@
 #include <QSaveFile>
 #include <QTemporaryFile>
 #include <QTimer>
+
+#ifdef Q_OS_WIN
+#include <Windows.h>
+#endif
 
 QHash<QUuid, QPointer<Database>> Database::s_uuidMap;
 
@@ -52,7 +57,11 @@ Database::Database()
 
     // other signals
     connect(m_metadata, &Metadata::modified, this, &Database::markAsModified);
-    connect(this, &Database::databaseOpened, this, [this]() { updateCommonUsernames(); });
+    connect(this, &Database::databaseOpened, this, [this]() {
+        updateCommonUsernames();
+        updateTagList();
+    });
+    connect(this, &Database::modified, this, [this] { updateTagList(); });
     connect(this, &Database::databaseSaved, this, [this]() { updateCommonUsernames(); });
     connect(m_fileWatcher, &FileWatcher::fileChanged, this, &Database::databaseFileChanged);
 
@@ -62,9 +71,9 @@ Database::Database()
     // block modified signal and set root group
     setEmitModified(false);
 
-    setRootGroup(new Group());
-    rootGroup()->setUuid(QUuid::createUuid());
-    rootGroup()->setName(tr("Passwords", "Root group name"));
+    // Note: oldGroup is nullptr but need to respect return value capture
+    auto oldGroup = setRootGroup(new Group());
+    Q_UNUSED(oldGroup)
 
     m_modified = false;
     setEmitModified(true);
@@ -92,17 +101,16 @@ QUuid Database::uuid() const
  * read-write mode and fall back to read-only if that is not possible.
  *
  * @param key composite key for unlocking the database
- * @param readOnly open in read-only mode
  * @param error error message in case of failure
  * @return true on success
  */
-bool Database::open(QSharedPointer<const CompositeKey> key, QString* error, bool readOnly)
+bool Database::open(QSharedPointer<const CompositeKey> key, QString* error)
 {
     Q_ASSERT(!m_data.filePath.isEmpty());
     if (m_data.filePath.isEmpty()) {
         return false;
     }
-    return open(m_data.filePath, std::move(key), error, readOnly);
+    return open(m_data.filePath, std::move(key), error);
 }
 
 /**
@@ -110,13 +118,14 @@ bool Database::open(QSharedPointer<const CompositeKey> key, QString* error, bool
  * Unless `readOnly` is set to false, the database will be opened in
  * read-write mode and fall back to read-only if that is not possible.
  *
+ * If key is provided as null, only headers will be read.
+ *
  * @param filePath path to the file
  * @param key composite key for unlocking the database
- * @param readOnly open in read-only mode
  * @param error error message in case of failure
  * @return true on success
  */
-bool Database::open(const QString& filePath, QSharedPointer<const CompositeKey> key, QString* error, bool readOnly)
+bool Database::open(const QString& filePath, QSharedPointer<const CompositeKey> key, QString* error)
 {
     QFile dbFile(filePath);
     if (!dbFile.exists()) {
@@ -150,7 +159,6 @@ bool Database::open(const QString& filePath, QSharedPointer<const CompositeKey> 
         return false;
     }
 
-    setReadOnly(readOnly);
     setFilePath(filePath);
     dbFile.close();
 
@@ -161,6 +169,27 @@ bool Database::open(const QString& filePath, QSharedPointer<const CompositeKey> 
     setEmitModified(true);
 
     return true;
+}
+
+/**
+ * KDBX format version.
+ */
+quint32 Database::formatVersion() const
+{
+    return m_data.formatVersion;
+}
+
+void Database::setFormatVersion(quint32 version)
+{
+    m_data.formatVersion = version;
+}
+
+/**
+ * Whether the KDBX minor version is greater than the newest supported.
+ */
+bool Database::hasMinorVersionMismatch() const
+{
+    return m_data.formatVersion > KeePass2::FILE_VERSION_MAX;
 }
 
 bool Database::isSaving()
@@ -178,10 +207,10 @@ bool Database::isSaving()
  *
  * @param error error message in case of failure
  * @param atomic Use atomic file transactions
- * @param backup Backup the existing database file, if exists
+ * @param backupFilePath Absolute file path to write the backup file to. Pass an empty QString to disable backup.
  * @return true on success
  */
-bool Database::save(QString* error, bool atomic, bool backup)
+bool Database::save(SaveAction action, const QString& backupFilePath, QString* error)
 {
     Q_ASSERT(!m_data.filePath.isEmpty());
     if (m_data.filePath.isEmpty()) {
@@ -191,7 +220,7 @@ bool Database::save(QString* error, bool atomic, bool backup)
         return false;
     }
 
-    return saveAs(m_data.filePath, error, atomic, backup);
+    return saveAs(m_data.filePath, action, backupFilePath, error);
 }
 
 /**
@@ -209,10 +238,11 @@ bool Database::save(QString* error, bool atomic, bool backup)
  * @param filePath Absolute path of the file to save
  * @param error error message in case of failure
  * @param atomic Use atomic file transactions
- * @param backup Backup the existing database file, if exists
+ * @param backupFilePath Absolute path to the location where the backup should be stored. Passing an empty string
+ * disables backup.
  * @return true on success
  */
-bool Database::saveAs(const QString& filePath, QString* error, bool atomic, bool backup)
+bool Database::saveAs(const QString& filePath, SaveAction action, const QString& backupFilePath, QString* error)
 {
     // Disallow overlapping save operations
     if (isSaving()) {
@@ -230,19 +260,7 @@ bool Database::saveAs(const QString& filePath, QString* error, bool atomic, bool
         return false;
     }
 
-    // Prevent destructive operations while saving
-    QMutexLocker locker(&m_saveMutex);
-
     if (filePath == m_data.filePath) {
-        // Disallow saving to the same file if read-only
-        if (m_data.isReadOnly) {
-            Q_ASSERT_X(false, "Database::saveAs", "Could not save, database file is read-only.");
-            if (error) {
-                *error = tr("Could not save, database file is read-only.");
-            }
-            return false;
-        }
-
         // Fail-safe check to make sure we don't overwrite underlying file changes
         // that have not yet triggered a file reload/merge operation.
         if (!m_fileWatcher->hasSameFileChecksum()) {
@@ -254,19 +272,37 @@ bool Database::saveAs(const QString& filePath, QString* error, bool atomic, bool
     }
 
     // Clear read-only flag
-    setReadOnly(false);
     m_fileWatcher->stop();
+
+    // Add random data to prevent side-channel data deduplication attacks
+    int length = Random::instance()->randomUIntRange(64, 512);
+    m_metadata->customData()->set("KPXC_RANDOM_SLUG", Random::instance()->randomArray(length).toHex());
+
+    // Prevent destructive operations while saving
+    QMutexLocker locker(&m_saveMutex);
 
     QFileInfo fileInfo(filePath);
     auto realFilePath = fileInfo.exists() ? fileInfo.canonicalFilePath() : fileInfo.absoluteFilePath();
     bool isNewFile = !QFile::exists(realFilePath);
-    bool ok = AsyncTask::runAndWaitForFuture([&] { return performSave(realFilePath, error, atomic, backup); });
+
+#ifdef Q_OS_WIN
+    bool isHidden = fileInfo.isHidden();
+#endif
+
+    bool ok = AsyncTask::runAndWaitForFuture([&] { return performSave(realFilePath, action, backupFilePath, error); });
     if (ok) {
-        markAsClean();
         setFilePath(filePath);
+        markAsClean();
         if (isNewFile) {
             QFile::setPermissions(realFilePath, QFile::ReadUser | QFile::WriteUser);
         }
+
+#ifdef Q_OS_WIN
+        if (isHidden) {
+            SetFileAttributes(realFilePath.toStdString().c_str(), FILE_ATTRIBUTE_HIDDEN);
+        }
+#endif
+
         m_fileWatcher->start(realFilePath, 30, 1);
     } else {
         // Saving failed, don't rewatch file since it does not represent our database
@@ -276,14 +312,19 @@ bool Database::saveAs(const QString& filePath, QString* error, bool atomic, bool
     return ok;
 }
 
-bool Database::performSave(const QString& filePath, QString* error, bool atomic, bool backup)
+bool Database::performSave(const QString& filePath, SaveAction action, const QString& backupFilePath, QString* error)
 {
+    if (!backupFilePath.isNull()) {
+        backupDatabase(filePath, backupFilePath);
+    }
+
 #if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
     QFileInfo info(filePath);
     auto createTime = info.exists() ? info.birthTime() : QDateTime::currentDateTime();
 #endif
 
-    if (atomic) {
+    switch (action) {
+    case Atomic: {
         QSaveFile saveFile(filePath);
         if (saveFile.open(QIODevice::WriteOnly)) {
             // write the database to the file
@@ -291,12 +332,8 @@ bool Database::performSave(const QString& filePath, QString* error, bool atomic,
                 return false;
             }
 
-            if (backup) {
-                backupDatabase(filePath);
-            }
-
 #if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
-            // Retain orginal creation time
+            // Retain original creation time
             saveFile.setFileTime(createTime, QFile::FileBirthTime);
 #endif
 
@@ -309,19 +346,16 @@ bool Database::performSave(const QString& filePath, QString* error, bool atomic,
         if (error) {
             *error = saveFile.errorString();
         }
-    } else {
+        break;
+    }
+    case TempFile: {
         QTemporaryFile tempFile;
         if (tempFile.open()) {
             // write the database to the file
             if (!writeDatabase(&tempFile, error)) {
                 return false;
             }
-
             tempFile.close(); // flush to disk
-
-            if (backup) {
-                backupDatabase(filePath);
-            }
 
             // Delete the original db and move the temp file in place
             auto perms = QFile::permissions(filePath);
@@ -335,11 +369,11 @@ bool Database::performSave(const QString& filePath, QString* error, bool atomic,
                 tempFile.setAutoRemove(false);
                 QFile::setPermissions(filePath, perms);
 #if QT_VERSION >= QT_VERSION_CHECK(5, 10, 0)
-                // Retain orginal creation time
+                // Retain original creation time
                 tempFile.setFileTime(createTime, QFile::FileBirthTime);
 #endif
                 return true;
-            } else if (!backup || !restoreDatabase(filePath)) {
+            } else if (backupFilePath.isEmpty() || !restoreDatabase(filePath, backupFilePath)) {
                 // Failed to copy new database in place, and
                 // failed to restore from backup or backups disabled
                 tempFile.setAutoRemove(false);
@@ -353,6 +387,23 @@ bool Database::performSave(const QString& filePath, QString* error, bool atomic,
         if (error) {
             *error = tempFile.errorString();
         }
+        break;
+    }
+    case DirectWrite: {
+        // Open the original database file for direct-write
+        QFile dbFile(filePath);
+        if (dbFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            if (!writeDatabase(&dbFile, error)) {
+                return false;
+            }
+            dbFile.close();
+            return true;
+        }
+        if (error) {
+            *error = dbFile.errorString();
+        }
+        break;
+    }
     }
 
     // Saving failed
@@ -361,17 +412,9 @@ bool Database::performSave(const QString& filePath, QString* error, bool atomic,
 
 bool Database::writeDatabase(QIODevice* device, QString* error)
 {
-    Q_ASSERT(!m_data.isReadOnly);
-    if (m_data.isReadOnly) {
-        if (error) {
-            *error = tr("File cannot be written as it is opened in read-only mode.");
-        }
-        return false;
-    }
-
     PasswordKey oldTransformedKey;
     if (m_data.key->isEmpty()) {
-        oldTransformedKey.setHash(m_data.transformedDatabaseKey->rawKey());
+        oldTransformedKey.setRawKey(m_data.transformedDatabaseKey->rawKey());
     }
 
     KeePass2Writer writer;
@@ -443,6 +486,7 @@ bool Database::import(const QString& xmlExportPath, QString* error)
 void Database::releaseData()
 {
     // Prevent data release while saving
+    Q_ASSERT(!isSaving());
     QMutexLocker locker(&m_saveMutex);
 
     if (m_modified) {
@@ -458,35 +502,38 @@ void Database::releaseData()
     m_data.clear();
     m_metadata->clear();
 
-    auto oldGroup = rootGroup();
-    setRootGroup(new Group());
-    // explicitly delete old group, otherwise it is only deleted when the database object is destructed
+    // Reset and delete the root group
+    auto oldGroup = setRootGroup(new Group());
     delete oldGroup;
 
     m_fileWatcher->stop();
 
     m_deletedObjects.clear();
     m_commonUsernames.clear();
+    m_tagList.clear();
 }
 
 /**
- * Remove the old backup and replace it with a new one
- * backups are named <filename>.old.<extension>
+ * Remove the old backup and replace it with a new one. Backup name is taken from destinationFilePath.
+ * Non-existing parent directories will be created automatically.
  *
  * @param filePath Path to the file to backup
+ * @param destinationFilePath Path to the backup destination file
  * @return true on success
  */
-bool Database::backupDatabase(const QString& filePath)
+bool Database::backupDatabase(const QString& filePath, const QString& destinationFilePath)
 {
-    static auto re = QRegularExpression("(\\.[^.]+)$");
-
-    auto match = re.match(filePath);
-    auto backupFilePath = filePath;
+    // Ensure that the path to write to actually exists
+    auto parentDirectory = QFileInfo(destinationFilePath).absoluteDir();
+    if (!parentDirectory.exists()) {
+        if (!QDir().mkpath(parentDirectory.absolutePath())) {
+            return false;
+        }
+    }
     auto perms = QFile::permissions(filePath);
-    backupFilePath = backupFilePath.replace(re, "") + ".old" + match.captured(1);
-    QFile::remove(backupFilePath);
-    bool res = QFile::copy(filePath, backupFilePath);
-    QFile::setPermissions(backupFilePath, perms);
+    QFile::remove(destinationFilePath);
+    bool res = QFile::copy(filePath, destinationFilePath);
+    QFile::setPermissions(destinationFilePath, perms);
     return res;
 }
 
@@ -498,31 +545,17 @@ bool Database::backupDatabase(const QString& filePath)
  * @param filePath Path to the file to restore
  * @return true on success
  */
-bool Database::restoreDatabase(const QString& filePath)
+bool Database::restoreDatabase(const QString& filePath, const QString& fromBackupFilePath)
 {
-    static auto re = QRegularExpression("^(.*?)(\\.[^.]+)?$");
-
-    auto match = re.match(filePath);
     auto perms = QFile::permissions(filePath);
-    auto backupFilePath = match.captured(1) + ".old" + match.captured(2);
     // Only try to restore if the backup file actually exists
-    if (QFile::exists(backupFilePath)) {
+    if (QFile::exists(fromBackupFilePath)) {
         QFile::remove(filePath);
-        if (QFile::copy(backupFilePath, filePath)) {
+        if (QFile::copy(fromBackupFilePath, filePath)) {
             return QFile::setPermissions(filePath, perms);
         }
     }
     return false;
-}
-
-bool Database::isReadOnly() const
-{
-    return m_data.isReadOnly;
-}
-
-void Database::setReadOnly(bool readOnly)
-{
-    m_data.isReadOnly = readOnly;
 }
 
 /**
@@ -546,14 +579,12 @@ const Group* Database::rootGroup() const
     return m_rootGroup;
 }
 
-/**
- * Sets group as the root group and takes ownership of it.
- * Warning: Be careful when calling this method as it doesn't
- *          emit any notifications so e.g. models aren't updated.
- *          The caller is responsible for cleaning up the previous
-            root group.
+/* Set the root group of the database and return
+ * the old root group. It is the responsibility
+ * of the calling function to dispose of the old
+ * root group.
  */
-void Database::setRootGroup(Group* group)
+Group* Database::setRootGroup(Group* group)
 {
     Q_ASSERT(group);
 
@@ -561,8 +592,17 @@ void Database::setRootGroup(Group* group)
         emit databaseDiscarded();
     }
 
+    auto oldRoot = m_rootGroup;
     m_rootGroup = group;
     m_rootGroup->setParent(this);
+
+    // Initialize the root group if not done already
+    if (m_rootGroup->uuid().isNull()) {
+        m_rootGroup->setUuid(QUuid::createUuid());
+        m_rootGroup->setName(tr("Passwords", "Root group name"));
+    }
+
+    return oldRoot;
 }
 
 Metadata* Database::metadata()
@@ -664,15 +704,55 @@ void Database::addDeletedObject(const QUuid& uuid)
     addDeletedObject(delObj);
 }
 
-QList<QString> Database::commonUsernames()
+const QStringList& Database::commonUsernames() const
 {
     return m_commonUsernames;
+}
+
+const QStringList& Database::tagList() const
+{
+    return m_tagList;
 }
 
 void Database::updateCommonUsernames(int topN)
 {
     m_commonUsernames.clear();
     m_commonUsernames.append(rootGroup()->usernamesRecursive(topN));
+}
+
+void Database::updateTagList()
+{
+    m_tagList.clear();
+    if (!m_rootGroup) {
+        emit tagListUpdated();
+        return;
+    }
+
+    // Search groups recursively looking for tags
+    // Use a set to prevent adding duplicates
+    QSet<QString> tagSet;
+    for (auto entry : m_rootGroup->entriesRecursive()) {
+        if (!entry->isRecycled()) {
+            for (auto tag : entry->tagList()) {
+                tagSet.insert(tag);
+            }
+        }
+    }
+
+    m_tagList = tagSet.toList();
+    m_tagList.sort();
+    emit tagListUpdated();
+}
+
+void Database::removeTag(const QString& tag)
+{
+    if (!m_rootGroup) {
+        return;
+    }
+
+    for (auto entry : m_rootGroup->entriesRecursive()) {
+        entry->removeTag(tag);
+    }
 }
 
 const QUuid& Database::cipher() const
@@ -699,11 +779,11 @@ bool Database::challengeMasterSeed(const QByteArray& masterSeed)
 {
     m_keyError.clear();
     if (m_data.key) {
-        m_data.masterSeed->setHash(masterSeed);
+        m_data.masterSeed->setRawKey(masterSeed);
         QByteArray response;
         bool ok = m_data.key->challenge(masterSeed, response, &m_keyError);
         if (ok && !response.isEmpty()) {
-            m_data.challengeResponseKey->setHash(response);
+            m_data.challengeResponseKey->setRawKey(response);
         } else if (ok && response.isEmpty()) {
             // no CR key present, make sure buffer is empty
             m_data.challengeResponseKey.reset(new PasswordKey);
@@ -741,7 +821,6 @@ bool Database::setKey(const QSharedPointer<const CompositeKey>& key,
                       bool updateTransformSalt,
                       bool transformKey)
 {
-    Q_ASSERT(!m_data.isReadOnly);
     m_keyError.clear();
 
     if (!key) {
@@ -757,7 +836,7 @@ bool Database::setKey(const QSharedPointer<const CompositeKey>& key,
 
     PasswordKey oldTransformedDatabaseKey;
     if (m_data.key && !m_data.key->isEmpty()) {
-        oldTransformedDatabaseKey.setHash(m_data.transformedDatabaseKey->rawKey());
+        oldTransformedDatabaseKey.setRawKey(m_data.transformedDatabaseKey->rawKey());
     }
 
     QByteArray transformedDatabaseKey;
@@ -770,7 +849,7 @@ bool Database::setKey(const QSharedPointer<const CompositeKey>& key,
 
     m_data.key = key;
     if (!transformedDatabaseKey.isEmpty()) {
-        m_data.transformedDatabaseKey->setHash(transformedDatabaseKey);
+        m_data.transformedDatabaseKey->setRawKey(transformedDatabaseKey);
     }
     if (updateChangedTime) {
         m_metadata->setDatabaseKeyChanged(Clock::currentDateTimeUtc());
@@ -800,14 +879,11 @@ const QVariantMap& Database::publicCustomData() const
 
 void Database::setPublicCustomData(const QVariantMap& customData)
 {
-    Q_ASSERT(!m_data.isReadOnly);
     m_data.publicCustomData = customData;
 }
 
 void Database::createRecycleBin()
 {
-    Q_ASSERT(!m_data.isReadOnly);
-
     auto recycleBin = new Group();
     recycleBin->setUuid(QUuid::createUuid());
     recycleBin->setParent(rootGroup());
@@ -821,7 +897,6 @@ void Database::createRecycleBin()
 
 void Database::recycleEntry(Entry* entry)
 {
-    Q_ASSERT(!m_data.isReadOnly);
     if (m_metadata->recycleBinEnabled()) {
         if (!m_metadata->recycleBin()) {
             createRecycleBin();
@@ -834,7 +909,6 @@ void Database::recycleEntry(Entry* entry)
 
 void Database::recycleGroup(Group* group)
 {
-    Q_ASSERT(!m_data.isReadOnly);
     if (m_metadata->recycleBinEnabled()) {
         if (!m_metadata->recycleBin()) {
             createRecycleBin();
@@ -847,7 +921,6 @@ void Database::recycleGroup(Group* group)
 
 void Database::emptyRecycleBin()
 {
-    Q_ASSERT(!m_data.isReadOnly);
     if (m_metadata->recycleBinEnabled() && m_metadata->recycleBin()) {
         // destroying direct entries of the recycle bin
         QList<Entry*> subEntries = m_metadata->recycleBin()->entries();
@@ -875,7 +948,7 @@ bool Database::hasNonDataChanges() const
 void Database::markAsModified()
 {
     m_modified = true;
-    if (!m_modifiedTimer.isActive()) {
+    if (modifiedSignalEnabled() && !m_modifiedTimer.isActive()) {
         // Small time delay prevents numerous consecutive saves due to repeated signals
         startModifiedTimer();
     }
@@ -895,6 +968,7 @@ void Database::markAsClean()
 void Database::markNonDataChange()
 {
     m_hasNonDataChange = true;
+    emit databaseNonDataChanged();
 }
 
 /**
@@ -918,14 +992,12 @@ QSharedPointer<Kdf> Database::kdf() const
 
 void Database::setKdf(QSharedPointer<Kdf> kdf)
 {
-    Q_ASSERT(!m_data.isReadOnly);
     m_data.kdf = std::move(kdf);
+    setFormatVersion(KeePass2Writer::kdbxVersionRequired(this, true, m_data.kdf.isNull()));
 }
 
 bool Database::changeKdf(const QSharedPointer<Kdf>& kdf)
 {
-    Q_ASSERT(!m_data.isReadOnly);
-
     kdf->randomizeSeed();
     QByteArray transformedDatabaseKey;
     if (!m_data.key) {
@@ -936,18 +1008,31 @@ bool Database::changeKdf(const QSharedPointer<Kdf>& kdf)
     }
 
     setKdf(kdf);
-    m_data.transformedDatabaseKey->setHash(transformedDatabaseKey);
+    m_data.transformedDatabaseKey->setRawKey(transformedDatabaseKey);
     markAsModified();
 
     return true;
 }
 
+// Prevent warning about QTimer not allowed to be started/stopped from other thread
 void Database::startModifiedTimer()
 {
     QMetaObject::invokeMethod(&m_modifiedTimer, "start", Q_ARG(int, 150));
 }
 
+// Prevent warning about QTimer not allowed to be started/stopped from other thread
 void Database::stopModifiedTimer()
 {
     QMetaObject::invokeMethod(&m_modifiedTimer, "stop");
+}
+
+QUuid Database::publicUuid()
+{
+
+    if (!publicCustomData().contains("KPXC_PUBLIC_UUID")) {
+        publicCustomData().insert("KPXC_PUBLIC_UUID", QUuid::createUuid().toRfc4122());
+        markAsModified();
+    }
+
+    return QUuid::fromRfc4122(publicCustomData()["KPXC_PUBLIC_UUID"].toByteArray());
 }

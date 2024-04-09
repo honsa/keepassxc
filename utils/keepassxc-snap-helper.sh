@@ -52,23 +52,14 @@ JSON_CHROME=$(cat << EOF
     "type": "stdio",
     "allowed_origins": [
         "chrome-extension://iopaggbpplllidnfmcghoonnokmjoicf/",
-        "chrome-extension://oboonakemofpalcgghocfoadofidjkkk/"
+        "chrome-extension://oboonakemofpalcgghocfoadofidjkkk/",
+        "chrome-extension://pdffhmdngciaglkoonimfcmckehcpafo/"
     ]
 }
 EOF
 )
 
-askBrowserSnap() {
-    if (whiptail --title "Snap Choice" --defaultno \
-            --yesno "Is this browser installed as a snap (usually NO)?" 8 60); then
-        # BASE_DIR="$1"
-        whiptail --title "Snap Choice" --msgbox "Sorry, browsers installed as snaps are not supported at this time" 8 50
-        exit 0
-    fi
-}
-
 setupFirefox() {
-    askBrowserSnap "./snap/firefox/common"
     JSON_OUT=${JSON_FIREFOX}
     INSTALL_DIR="${BASE_DIR}/.mozilla/native-messaging-hosts"
 }
@@ -79,7 +70,6 @@ setupChrome() {
 }
 
 setupChromium() {
-    askBrowserSnap "./snap/chromium/current"
     JSON_OUT=${JSON_CHROME}
     INSTALL_DIR="${BASE_DIR}/.config/chromium/NativeMessagingHosts"
 }
@@ -99,6 +89,11 @@ setupTorBrowser() {
     INSTALL_DIR="${BASE_DIR}/.tor-browser/app/Browser/TorBrowser/Data/Browser/.mozilla/native-messaging-hosts"
 }
 
+setupEdge() {
+    JSON_OUT=${JSON_CHROME}
+    INSTALL_DIR="${BASE_DIR}/.config/microsoft-edge/NativeMessagingHosts"
+}
+
 # --------------------------------
 # Start of script
 # --------------------------------
@@ -113,26 +108,29 @@ BROWSER=$(whiptail \
             "4" "Vivaldi" \
             "5" "Brave" \
             "6" "Tor Browser" \
+            "7" "Microsoft Edge" \
             3>&1 1>&2 2>&3)
+
+exitstatus=$?
 
 clear
 
-exitstatus=$?
-if [ $exitstatus = 0 ]; then
+if [[ $exitstatus == 0 ]]; then
     # Configure settings for the chosen browser
-    case "$BROWSER" in
+    case $BROWSER in
         1) setupFirefox ;;
         2) setupChrome ;;
         3) setupChromium ;;
         4) setupVivaldi ;;
         5) setupBrave ;;
         6) setupTorBrowser ;;
+        7) setupEdge ;;
     esac
 
     # Install the JSON file
     cd ~
     mkdir -p "$INSTALL_DIR"
-    echo "$JSON_OUT" > ${INSTALL_DIR}/${INSTALL_FILE}
+    echo "$JSON_OUT" > "${INSTALL_DIR}/${INSTALL_FILE}"
 
     whiptail \
         --title "Installation Complete" \

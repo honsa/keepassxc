@@ -26,6 +26,7 @@ namespace Ui
     class EntryPreviewWidget;
 }
 
+class QTabWidget;
 class QTextEdit;
 
 class EntryPreviewWidget : public QWidget
@@ -40,11 +41,14 @@ public slots:
     void setEntry(Entry* selectedEntry);
     void setGroup(Group* selectedGroup);
     void setDatabaseMode(DatabaseWidget::Mode mode);
+    void refresh();
     void clear();
 
 signals:
-    void errorOccurred(const QString& error);
     void entryUrlActivated(Entry* entry);
+
+protected:
+    bool eventFilter(QObject* object, QEvent* event) override;
 
 private slots:
     void updateEntryHeaderLine();
@@ -52,6 +56,7 @@ private slots:
     void updateEntryGeneralTab();
     void updateEntryAdvancedTab();
     void updateEntryAutotypeTab();
+    void setUsernameVisible(bool state);
     void setPasswordVisible(bool state);
     void setEntryNotesVisible(bool state);
     void setGroupNotesVisible(bool state);

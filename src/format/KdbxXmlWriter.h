@@ -18,17 +18,25 @@
 #ifndef KEEPASSX_KDBXXMLWRITER_H
 #define KEEPASSX_KDBXXMLWRITER_H
 
+#include <QDateTime>
 #include <QXmlStreamWriter>
 
+#include "core/CustomData.h"
 #include "core/Group.h"
+#include "core/Metadata.h"
 
 class KeePass2RandomStream;
-class Metadata;
 
 class KdbxXmlWriter
 {
 public:
+    /**
+     * Map of entry + attachment key to KDBX 4 inner header binary index.
+     */
+    typedef QHash<QPair<const Entry*, QString>, qint64> BinaryIdxMap;
+
     explicit KdbxXmlWriter(quint32 version);
+    explicit KdbxXmlWriter(quint32 version, KdbxXmlWriter::BinaryIdxMap binaryIdxMap);
 
     void writeDatabase(QIODevice* device,
                        const Database* db,
@@ -41,15 +49,16 @@ public:
     QString errorString();
 
 private:
-    void generateIdMap();
+    void fillBinaryIdxMap();
 
     void writeMetadata();
     void writeMemoryProtection();
     void writeCustomIcons();
-    void writeIcon(const QUuid& uuid, const QImage& icon);
+    void writeIcon(const QUuid& uuid, const Metadata::CustomIconData& iconData);
     void writeBinaries();
-    void writeCustomData(const CustomData* customData);
-    void writeCustomDataItem(const QString& key, const QString& value);
+    void writeCustomData(const CustomData* customData, bool writeItemLastModified = false);
+    void
+    writeCustomDataItem(const QString& key, const CustomData::CustomDataItem& item, bool writeLastModified = false);
     void writeRoot();
     void writeGroup(const Group* group);
     void writeTimes(const TimeInfo& ti);
@@ -82,7 +91,7 @@ private:
     QPointer<const Database> m_db;
     QPointer<const Metadata> m_meta;
     KeePass2RandomStream* m_randomStream = nullptr;
-    QHash<QByteArray, int> m_idMap;
+    BinaryIdxMap m_binaryIdxMap;
     QByteArray m_headerHash;
 
     bool m_error = false;

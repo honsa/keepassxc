@@ -15,8 +15,8 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifndef NATIVEMESSAGINGHOST_H
-#define NATIVEMESSAGINGHOST_H
+#ifndef KEEPASSXC_NATIVEMESSAGINGHOST_H
+#define KEEPASSXC_NATIVEMESSAGINGHOST_H
 
 #include <QJsonObject>
 #include <QObject>
@@ -24,6 +24,7 @@
 
 class QLocalServer;
 class QLocalSocket;
+class QString;
 
 class BrowserHost : public QObject
 {
@@ -36,10 +37,11 @@ public:
     void start();
     void stop();
 
-    void sendClientMessage(const QJsonObject& json);
+    void broadcastClientMessage(const QJsonObject& json);
+    void sendClientMessage(QLocalSocket* socket, const QJsonObject& json);
 
 signals:
-    void clientMessageReceived(const QJsonObject& json);
+    void clientMessageReceived(QLocalSocket* socket, const QJsonObject& json);
 
 private slots:
     void proxyConnected();
@@ -47,8 +49,11 @@ private slots:
     void proxyDisconnected();
 
 private:
+    void sendClientData(QLocalSocket* socket, const QString& data);
+
+private:
     QPointer<QLocalServer> m_localServer;
     QList<QLocalSocket*> m_socketList;
 };
 
-#endif // NATIVEMESSAGINGHOST_H
+#endif // KEEPASSXC_NATIVEMESSAGINGHOST_H
