@@ -26,7 +26,6 @@
 #include "crypto/Crypto.h"
 #include "keys/FileKey.h"
 #include "keys/drivers/YubiKey.h"
-#include "zxcvbn/zxcvbn.h"
 
 #include "cli/Add.h"
 #include "cli/AddGroup.h"
@@ -59,6 +58,7 @@
 #include <QSignalSpy>
 #include <QTest>
 #include <QtConcurrent>
+#include <zxcvbn.h>
 
 QTEST_MAIN(TestCli)
 
@@ -1088,7 +1088,7 @@ void TestCli::testDiceware()
     smallWordFile.close();
 
     execCmd(dicewareCmd, {"diceware", "-W", "11", "-w", smallWordFile.fileName()});
-    QCOMPARE(m_stderr->readLine(), QByteArray("The word list is too small (< 1000 items)\n"));
+    QCOMPARE(m_stderr->readLine(), QByteArray("Cannot generate valid passphrases because the wordlist is too short\n"));
 }
 
 void TestCli::testEdit()
@@ -2113,7 +2113,7 @@ void TestCli::testShow()
                         "Tags: \n"
                         "\n"
                         "Attachments:\n"
-                        "  Sample attachment.txt (15.0 B)\n"));
+                        "  Sample attachment.txt (15 B)\n"));
 
     setInput("a");
     execCmd(showCmd, {"show", m_dbFile->fileName(), "--show-attachments", "/Homebanking/Subgroup/Subgroup Entry"});

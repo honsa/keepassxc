@@ -19,7 +19,9 @@
 #include "ui_ReportsWidgetPasskeys.h"
 
 #include "browser/BrowserPasskeys.h"
+#include "browser/PasskeyUtils.h"
 #include "core/AsyncTask.h"
+#include "core/EntryAttributes.h"
 #include "core/Group.h"
 #include "core/Metadata.h"
 #include "gui/GuiTools.h"
@@ -74,7 +76,7 @@ PasskeyList::PasskeyList(const QSharedPointer<Database>& db)
         }
 
         for (auto entry : group->entries()) {
-            if (entry->isRecycled() || !entry->attributes()->hasKey(BrowserPasskeys::KPEX_PASSKEY_PRIVATE_KEY_PEM)) {
+            if (entry->isRecycled() || !entry->attributes()->hasKey(EntryAttributes::KPEX_PASSKEY_PRIVATE_KEY_PEM)) {
                 continue;
             }
 
@@ -132,8 +134,8 @@ void ReportsWidgetPasskeys::addPasskeyRow(Group* group, Entry* entry)
     auto row = QList<QStandardItem*>();
     row << new QStandardItem(Icons::entryIconPixmap(entry), title);
     row << new QStandardItem(Icons::groupIconPixmap(group), group->hierarchy().join("/"));
-    row << new QStandardItem(entry->username());
-    row << new QStandardItem(entry->attributes()->value(BrowserPasskeys::KPEX_PASSKEY_RELYING_PARTY));
+    row << new QStandardItem(passkeyUtils()->getUsernameFromEntry(entry));
+    row << new QStandardItem(entry->attributes()->value(EntryAttributes::KPEX_PASSKEY_RELYING_PARTY));
     row << new QStandardItem(urlList.join('\n'));
 
     // Set tooltips
@@ -152,7 +154,7 @@ void ReportsWidgetPasskeys::loadSettings(QSharedPointer<Database> db)
     m_rowToEntry.clear();
 
     auto row = QList<QStandardItem*>();
-    row << new QStandardItem(tr("Please wait, list of entries with Passkeys is being updated…"));
+    row << new QStandardItem(tr("Please wait, list of entries with passkeys is being updated…"));
     m_referencesModel->appendRow(row);
 }
 
@@ -188,7 +190,7 @@ void ReportsWidgetPasskeys::updateEntries()
 
     // Set the table header
     if (m_referencesModel->rowCount() == 0) {
-        m_referencesModel->setHorizontalHeaderLabels(QStringList() << tr("No entries with Passkeys."));
+        m_referencesModel->setHorizontalHeaderLabels(QStringList() << tr("No entries with passkeys."));
     } else {
         m_referencesModel->setHorizontalHeaderLabels(QStringList() << tr("Title") << tr("Path") << tr("Username")
                                                                    << tr("Relying Party") << tr("URLs"));
@@ -282,7 +284,7 @@ void ReportsWidgetPasskeys::selectionChanged()
 
 void ReportsWidgetPasskeys::importPasskey()
 {
-    PasskeyImporter passkeyImporter;
+    PasskeyImporter passkeyImporter(this);
     passkeyImporter.importPasskey(m_db);
 
     updateEntries();
@@ -300,6 +302,6 @@ void ReportsWidgetPasskeys::exportPasskey()
         return;
     }
 
-    PasskeyExporter passkeyExporter;
+    PasskeyExporter passkeyExporter(this);
     passkeyExporter.showExportDialog(getSelectedEntries());
 }

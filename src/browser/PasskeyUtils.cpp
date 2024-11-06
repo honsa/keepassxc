@@ -18,8 +18,9 @@
 #include "PasskeyUtils.h"
 #include "BrowserMessageBuilder.h"
 #include "BrowserPasskeys.h"
+#include "core/EntryAttributes.h"
 #include "core/Tools.h"
-#include "core/UrlTools.h"
+#include "gui/UrlTools.h"
 
 #include <QList>
 #include <QUrl>
@@ -305,9 +306,8 @@ bool PasskeyUtils::isUserVerificationRequired(const QJsonObject& authenticatorSe
                && BrowserPasskeys::SUPPORT_USER_VERIFICATION);
 }
 
-QByteArray PasskeyUtils::buildExtensionData(QJsonObject& extensionObject) const
+ExtensionResult PasskeyUtils::buildExtensionData(QJsonObject& extensionObject) const
 {
-    // Only supports "credProps" and "uvm" for now
     const QStringList allowedKeys = {"credProps", "uvm"};
 
     // Remove unsupported keys
@@ -317,9 +317,36 @@ QByteArray PasskeyUtils::buildExtensionData(QJsonObject& extensionObject) const
         }
     }
 
+    // Create response object
+    QJsonObject extensionJSON;
+
+    // https://w3c.github.io/webauthn/#sctn-authenticator-credential-properties-extension
+    if (extensionObject.contains("credProps") && extensionObject["credProps"].toBool()) {
+        extensionJSON["credProps"] = QJsonObject({{"rk", true}});
+    }
+
+    // https://w3c.github.io/webauthn/#sctn-uvm-extension
+    if (extensionObject.contains("uvm") && extensionObject["uvm"].toBool()) {
+        QJsonArray uvmResponse;
+        QJsonArray uvmArray = {
+            1, // userVerificationMethod (USER_VERIFY_PRESENCE_INTERNAL "presence_internal", 0x00000001)
+            1, // keyProtectionType (KEY_PROTECTION_SOFTWARE "software", 0x0001)
+            1, // matcherProtectionType (MATCHER_PROTECTION_SOFTWARE "software", 0x0001)
+        };
+        uvmResponse.append(uvmArray);
+        extensionJSON["uvm"] = uvmResponse;
+    }
+
+    if (extensionJSON.isEmpty()) {
+        return {};
+    }
+
     auto extensionData = m_browserCbor.cborEncodeExtensionData(extensionObject);
     if (!extensionData.isEmpty()) {
-        return extensionData;
+        ExtensionResult result;
+        result.extensionData = extensionData;
+        result.extensionObject = extensionJSON;
+        return result;
     }
 
     return {};
@@ -363,9 +390,9 @@ QString PasskeyUtils::getCredentialIdFromEntry(const Entry* entry) const
         return {};
     }
 
-    return entry->attributes()->hasKey(BrowserPasskeys::KPEX_PASSKEY_GENERATED_USER_ID)
-               ? entry->attributes()->value(BrowserPasskeys::KPEX_PASSKEY_GENERATED_USER_ID)
-               : entry->attributes()->value(BrowserPasskeys::KPEX_PASSKEY_CREDENTIAL_ID);
+    return entry->attributes()->hasKey(EntryAttributes::KPEX_PASSKEY_GENERATED_USER_ID)
+               ? entry->attributes()->value(EntryAttributes::KPEX_PASSKEY_GENERATED_USER_ID)
+               : entry->attributes()->value(EntryAttributes::KPEX_PASSKEY_CREDENTIAL_ID);
 }
 
 // For compatibility with StrongBox (and other possible clients in the future)
@@ -375,7 +402,7 @@ QString PasskeyUtils::getUsernameFromEntry(const Entry* entry) const
         return {};
     }
 
-    return entry->attributes()->hasKey(BrowserPasskeys::KPXC_PASSKEY_USERNAME)
-               ? entry->attributes()->value(BrowserPasskeys::KPXC_PASSKEY_USERNAME)
-               : entry->attributes()->value(BrowserPasskeys::KPEX_PASSKEY_USERNAME);
+    return entry->attributes()->hasKey(EntryAttributes::KPXC_PASSKEY_USERNAME)
+               ? entry->attributes()->value(EntryAttributes::KPXC_PASSKEY_USERNAME)
+               : entry->attributes()->value(EntryAttributes::KPEX_PASSKEY_USERNAME);
 }

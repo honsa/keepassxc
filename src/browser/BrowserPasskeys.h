@@ -105,21 +105,13 @@ public:
     static const QString PASSKEYS_ATTESTATION_DIRECT;
     static const QString PASSKEYS_ATTESTATION_NONE;
 
-    static const QString KPXC_PASSKEY_USERNAME;
-    static const QString KPEX_PASSKEY_USERNAME;
-    static const QString KPEX_PASSKEY_CREDENTIAL_ID;
-    static const QString KPEX_PASSKEY_GENERATED_USER_ID;
-    static const QString KPEX_PASSKEY_PRIVATE_KEY_PEM;
-    static const QString KPEX_PASSKEY_RELYING_PARTY;
-    static const QString KPEX_PASSKEY_USER_HANDLE;
-
 private:
     QByteArray buildAttestationObject(const QJsonObject& credentialCreationOptions,
                                       const QString& extensions,
                                       const QString& credentialId,
                                       const QByteArray& cborEncodedPublicKey,
                                       const TestingVariables& predefinedVariables = {});
-    QByteArray buildAuthenticatorData(const QJsonObject& publicKey);
+    QByteArray buildAuthenticatorData(const QString& rpId, const QString& extensions);
     AttestationKeyPair buildCredentialPrivateKey(int alg,
                                                  const QString& predefinedFirst = QString(),
                                                  const QString& predefinedSecond = QString());

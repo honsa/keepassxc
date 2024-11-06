@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2023 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2024 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -25,6 +25,7 @@
 #include "core/Totp.h"
 #include "crypto/CryptoHash.h"
 #include "crypto/SymmetricCipher.h"
+#include "crypto/kdf/Argon2Kdf.h"
 
 #include <botan/kdf.h>
 #include <botan/pwdhash.h>
@@ -36,6 +37,7 @@
 #include <QJsonParseError>
 #include <QMap>
 #include <QScopedPointer>
+#include <QUrl>
 
 namespace
 {
@@ -44,6 +46,13 @@ namespace
         // Create the item map and extract the folder id
         const auto itemMap = item.toVariantMap();
         folderId = itemMap.value("folderId").toString();
+        if (folderId.isEmpty()) {
+            // Bitwarden organization vaults use collectionId instead of folderId
+            auto collectionIds = itemMap.value("collectionIds").toStringList();
+            if (!collectionIds.empty()) {
+                folderId = collectionIds.first();
+            }
+        }
 
         // Create entry and assign basic values
         QScopedPointer<Entry> entry(new Entry());
@@ -61,8 +70,52 @@ namespace
             entry->setUsername(loginMap.value("username").toString());
             entry->setPassword(loginMap.value("password").toString());
             if (loginMap.contains("totp")) {
-                // Bitwarden stores TOTP as otpauth string
-                entry->setTotp(Totp::parseSettings(loginMap.value("totp").toString()));
+                auto totp = loginMap.value("totp").toString();
+                if (!totp.startsWith("otpauth://")) {
+                    QUrl url(QString("otpauth://totp/%1:%2?secret=%3")
+                                 .arg(QString(QUrl::toPercentEncoding(entry->title())),
+                                      QString(QUrl::toPercentEncoding(entry->username())),
+                                      QString(QUrl::toPercentEncoding(totp))));
+                    totp = url.toString(QUrl::FullyEncoded);
+                }
+                entry->setTotp(Totp::parseSettings(totp));
+            }
+
+            // Parse passkey
+            if (loginMap.contains("fido2Credentials")) {
+                const auto fido2CredentialsMap = loginMap.value("fido2Credentials").toList();
+                for (const auto& fido2Credentials : fido2CredentialsMap) {
+                    const auto passkey = fido2Credentials.toMap();
+
+                    // Change from UUID to base64 byte array
+                    const auto credentialIdValue = passkey.value("credentialId").toString();
+                    if (!credentialIdValue.isEmpty()) {
+                        const auto credentialUuid = Tools::uuidToHex(credentialIdValue);
+                        const auto credentialIdArray = QByteArray::fromHex(credentialUuid.toUtf8());
+                        const auto credentialId =
+                            credentialIdArray.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+                        entry->attributes()->set(EntryAttributes::KPEX_PASSKEY_CREDENTIAL_ID, credentialId, true);
+                    }
+
+                    // Base64 needs to be changed from URL encoding back to normal, and the result as PEM string
+                    const auto keyValue = passkey.value("keyValue").toString();
+                    if (!keyValue.isEmpty()) {
+                        const auto keyValueArray =
+                            QByteArray::fromBase64(keyValue.toUtf8(), QByteArray::Base64UrlEncoding);
+                        auto privateKey = keyValueArray.toBase64(QByteArray::Base64Encoding);
+                        privateKey.insert(0, EntryAttributes::KPEX_PASSKEY_PRIVATE_KEY_START.toUtf8());
+                        privateKey.append(EntryAttributes::KPEX_PASSKEY_PRIVATE_KEY_END.toUtf8());
+                        entry->attributes()->set(EntryAttributes::KPEX_PASSKEY_PRIVATE_KEY_PEM, privateKey, true);
+                    }
+
+                    entry->attributes()->set(EntryAttributes::KPEX_PASSKEY_USERNAME,
+                                             passkey.value("userName").toString());
+                    entry->attributes()->set(EntryAttributes::KPEX_PASSKEY_RELYING_PARTY,
+                                             passkey.value("rpId").toString());
+                    entry->attributes()->set(
+                        EntryAttributes::KPEX_PASSKEY_USER_HANDLE, passkey.value("userHandle").toString(), true);
+                    entry->addTag(QObject::tr("Passkey"));
+                }
             }
 
             // Set the entry url(s)
@@ -160,14 +213,20 @@ namespace
 
     void writeVaultToDatabase(const QJsonObject& vault, QSharedPointer<Database> db)
     {
-        if (!vault.contains("folders") || !vault.contains("items")) {
+        auto folderField = QString("folders");
+        if (!vault.contains(folderField)) {
+            // Handle Bitwarden organization vaults
+            folderField = "collections";
+        }
+
+        if (!vault.contains(folderField) || !vault.contains("items")) {
             // Early out if the vault is missing critical items
             return;
         }
 
         // Create groups from folders and store a temporary map of id -> uuid
         QMap<QString, Group*> folderMap;
-        for (const auto& folder : vault.value("folders").toArray()) {
+        for (const auto& folder : vault.value(folderField).toArray()) {
             auto group = new Group();
             group->setUuid(QUuid::createUuid());
             group->setName(folder.toObject().value("name").toString());
@@ -230,26 +289,57 @@ QSharedPointer<Database> BitwardenReader::convert(const QString& path, const QSt
             return QObject::tr("Failed to decrypt json file: %1").arg(errorString);
         };
 
+        if (!json.contains("kdfType") || !json.contains("salt")) {
+            m_error = buildError(QObject::tr("Unsupported format, ensure your Bitwarden export is password-protected"));
+            return {};
+        }
+
         QByteArray key(32, '\0');
         auto salt = json.value("salt").toString().toUtf8();
-
-        auto pwd_fam = Botan::PasswordHashFamily::create_or_throw("PBKDF2(SHA-256)");
-        auto kdf = Botan::KDF::create_or_throw("HKDF-Expand(SHA-256)");
+        auto kdfType = json.value("kdfType").toInt();
 
         // Derive the Master Key
-        auto pwd_hash = pwd_fam->from_params(json.value("kdfIterations").toInt());
-        pwd_hash->derive_key(reinterpret_cast<uint8_t*>(key.data()),
-                             key.size(),
-                             password.toUtf8().data(),
-                             password.toUtf8().size(),
-                             reinterpret_cast<uint8_t*>(salt.data()),
-                             salt.size());
+        if (kdfType == 0) {
+            // PBKDF2
+            auto iterations = json.value("kdfIterations").toInt();
+            if (iterations <= 0) {
+                m_error = buildError(QObject::tr("Invalid KDF iterations, cannot decrypt json file"));
+                return {};
+            }
+            auto pwd_fam = Botan::PasswordHashFamily::create_or_throw("PBKDF2(SHA-256)");
+            auto pwd_hash = pwd_fam->from_params(iterations);
+            pwd_hash->derive_key(reinterpret_cast<uint8_t*>(key.data()),
+                                 key.size(),
+                                 password.toUtf8().data(),
+                                 password.toUtf8().size(),
+                                 reinterpret_cast<uint8_t*>(salt.data()),
+                                 salt.size());
+        } else if (kdfType == 1) {
+            // Argon2
+            // Bitwarden hashes the salt prior to use
+            CryptoHash saltHash(CryptoHash::Sha256);
+            saltHash.addData(salt);
+            salt = saltHash.result();
+
+            Argon2Kdf argon2(Argon2Kdf::Type::Argon2id);
+            argon2.setSeed(salt);
+            argon2.setRounds(json.value("kdfIterations").toInt());
+            argon2.setMemory(json.value("kdfMemory").toInt() * 1024);
+            argon2.setParallelism(json.value("kdfParallelism").toInt());
+            argon2.transform(password.toUtf8(), key);
+        } else {
+            m_error = buildError(QObject::tr("Only PBKDF and Argon2 are supported, cannot decrypt json file"));
+            return {};
+        }
+
+        auto hkdf = Botan::KDF::create_or_throw("HKDF-Expand(SHA-256)");
+
         // Derive the MAC Key
-        auto stretched_mac = kdf->derive_key(32, reinterpret_cast<const uint8_t*>(key.data()), key.size(), "", "mac");
+        auto stretched_mac = hkdf->derive_key(32, reinterpret_cast<const uint8_t*>(key.data()), key.size(), "", "mac");
         auto mac = QByteArray(reinterpret_cast<const char*>(stretched_mac.data()), stretched_mac.size());
 
         // Stretch the Master Key
-        auto stretched_key = kdf->derive_key(32, reinterpret_cast<const uint8_t*>(key.data()), key.size(), "", "enc");
+        auto stretched_key = hkdf->derive_key(32, reinterpret_cast<const uint8_t*>(key.data()), key.size(), "", "enc");
         key = QByteArray(reinterpret_cast<const char*>(stretched_key.data()), stretched_key.size());
 
         // Validate the encryption key

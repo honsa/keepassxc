@@ -29,6 +29,7 @@
 #include "autotype/AutoTypePlatformPlugin.h"
 #include "autotype/AutoTypeSelectDialog.h"
 #include "autotype/PickcharsDialog.h"
+#include "core/Global.h"
 #include "core/Resources.h"
 #include "core/Tools.h"
 #include "gui/MainWindow.h"
@@ -271,7 +272,7 @@ void AutoType::executeAutoTypeActions(const Entry* entry,
             MessageBox::critical(getMainWindow(), tr("Auto-Type Error"), errorMsg);
         }
         qWarning() << errorMsg;
-        emit autotypeRejected();
+        emit autotypeFinished();
         return;
     }
 
@@ -318,13 +319,13 @@ void AutoType::executeAutoTypeActions(const Entry* entry,
     }
 
     for (const auto& action : asConst(actions)) {
+        // Cancel Auto-Type if the active window changed
         if (m_plugin->activeWindow() != window) {
             qWarning("Active window changed, interrupting auto-type.");
-            emit autotypeRejected();
-            m_inAutoType.unlock();
-            return;
+            break;
         }
 
+        bool failed = false;
         constexpr int max_retries = 5;
         for (int i = 1; i <= max_retries; i++) {
             auto result = action->exec(m_executor);
@@ -339,20 +340,22 @@ void AutoType::executeAutoTypeActions(const Entry* entry,
                 if (getMainWindow()) {
                     MessageBox::critical(getMainWindow(), tr("Auto-Type Error"), result.errorString());
                 }
-                emit autotypeRejected();
-                m_inAutoType.unlock();
-                return;
+                failed = true;
+                break;
             }
 
             Tools::wait(delay);
         }
+
+        // Last action failed to complete, cancel the rest of the sequence
+        if (failed) {
+            break;
+        }
     }
 
-    m_windowForGlobal = 0;
-    m_windowTitleForGlobal.clear();
-
-    emit autotypePerformed();
+    resetAutoTypeState();
     m_inAutoType.unlock();
+    emit autotypeFinished();
 }
 
 /**
@@ -387,7 +390,7 @@ void AutoType::performAutoTypeWithSequence(const Entry* entry, const QString& se
 void AutoType::startGlobalAutoType(const QString& search)
 {
     // Never Auto-Type into KeePassXC itself
-    if (qApp->focusWindow()) {
+    if (getMainWindow() && (qApp->activeWindow() || qApp->activeModalWidget())) {
         return;
     }
 
@@ -458,7 +461,7 @@ void AutoType::performGlobalAutoType(const QList<QSharedPointer<Database>>& dbLi
             if (hideExpired && entry->isExpired()) {
                 continue;
             }
-            auto sequences = entry->autoTypeSequences(m_windowTitleForGlobal).toSet();
+            const QSet<QString> sequences = Tools::asSet(entry->autoTypeSequences(m_windowTitleForGlobal));
             for (const auto& sequence : sequences) {
                 matchList << AutoTypeMatch(entry, sequence);
             }
@@ -495,7 +498,7 @@ void AutoType::performGlobalAutoType(const QList<QSharedPointer<Database>>& dbLi
         connect(selectDialog, &QDialog::rejected, this, [this] {
             restoreWindowState();
             resetAutoTypeState();
-            emit autotypeRejected();
+            emit autotypeFinished();
         });
 
 #ifdef Q_OS_MACOS
@@ -512,7 +515,7 @@ void AutoType::performGlobalAutoType(const QList<QSharedPointer<Database>>& dbLi
     } else {
         // We should never get here
         resetAutoTypeState();
-        emit autotypeRejected();
+        emit autotypeFinished();
     }
 }
 

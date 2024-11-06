@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2023 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2024 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2010 Felix Geyer <debfx@fobos.de>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -19,7 +19,6 @@
 #ifndef KEEPASSX_DATABASEWIDGET_H
 #define KEEPASSX_DATABASEWIDGET_H
 
-#include <QBuffer>
 #include <QStackedWidget>
 
 #include "core/Database.h"
@@ -27,6 +26,7 @@
 #include "core/Metadata.h"
 #include "gui/MessageWidget.h"
 #include "gui/entry/EntryModel.h"
+#include "remote/RemoteHandler.h"
 
 class DatabaseOpenDialog;
 class DatabaseOpenWidget;
@@ -45,6 +45,8 @@ class QLabel;
 class EntryPreviewWidget;
 class TagView;
 class ElidedLabel;
+class RemoteSettings;
+struct RemoteParams;
 
 namespace Ui
 {
@@ -62,8 +64,11 @@ public:
     {
         None,
         ViewMode,
-        EditMode,
-        LockedMode
+        EditEntryMode,
+        EditGroupMode,
+        LockedMode,
+        ReportsMode,
+        DatabaseSettingsMode
     };
 
     explicit DatabaseWidget(QSharedPointer<Database> db, QWidget* parent = nullptr);
@@ -104,7 +109,7 @@ public:
     QStringList customEntryAttributes() const;
     bool isEditWidgetModified() const;
     void clearAllWidgets();
-    Entry* currentSelectedEntry();
+    Entry* currentSelectedEntry() const;
     bool currentEntryHasTitle();
     bool currentEntryHasUsername();
     bool currentEntryHasPassword();
@@ -122,12 +127,17 @@ public:
     void setSplitterSizes(const QHash<Config::ConfigKey, QList<int>>& sizes);
     void setSearchStringForAutoType(const QString& search);
 
+    void syncWithRemote(const RemoteParams* params);
+    void syncDatabaseWithLockedDatabase(const QString& filePath, const RemoteParams* params);
+    QList<RemoteParams*> getRemoteParams() const;
+
 signals:
     // relayed Database signals
     void databaseFilePathChanged(const QString& oldPath, const QString& newPath);
     void databaseModified();
     void databaseNonDataChanged();
     void databaseSaved();
+    void databaseAboutToUnlock();
     void databaseUnlocked();
     void databaseLockRequested();
     void databaseLocked();
@@ -142,6 +152,13 @@ signals:
     void
     requestOpenDatabase(const QString& filePath, bool inBackground, const QString& password, const QString& keyFile);
     void databaseMerged(QSharedPointer<Database> mergedDb);
+    void databaseSyncInProgress();
+    void databaseSyncCompleted(const QString& syncName);
+    void databaseSyncFailed(const QString& syncName, const QString& error);
+    void databaseSyncUnlockFailed(const RemoteHandler::RemoteResult& result);
+    void databaseSyncUnlocked(const RemoteHandler::RemoteResult& result);
+    void unlockDatabaseInDialogForSync(const QString& filePath);
+    void updateSyncProgress(int percentage, QString message);
     void groupContextMenuRequested(const QPoint& globalPos);
     void entryContextMenuRequested(const QPoint& globalPos);
     void listModeAboutToActivate();
@@ -176,6 +193,7 @@ public slots:
     void copyURL();
     void copyNotes();
     void copyAttribute(QAction* action);
+    bool copyFocusedTextSelection();
     void filterByTag();
     void setTag(QAction* action);
     void showTotp();
@@ -193,6 +211,7 @@ public slots:
     void performAutoTypePassword();
     void performAutoTypePasswordEnter();
     void performAutoTypeTOTP();
+    void setClipboardTextAndMinimize(const QString& text);
     void openUrl();
     void downloadSelectedFavicons();
     void downloadAllFavicons();
@@ -209,9 +228,12 @@ public slots:
     void switchToDatabaseSecurity();
     void switchToDatabaseReports();
     void switchToDatabaseSettings();
+    void switchToRemoteSettings();
 #ifdef WITH_XC_BROWSER_PASSKEYS
     void switchToPasskeys();
     void showImportPasskeyDialog(bool isEntry = false);
+    void removePasskeyFromEntry();
+    bool currentEntryHasPasskey();
 #endif
     void switchToOpenDatabase();
     void switchToOpenDatabase(const QString& filePath);
@@ -258,14 +280,18 @@ private slots:
     void loadDatabase(bool accepted);
     void unlockDatabase(bool accepted);
     void mergeDatabase(bool accepted);
+    void syncUnlockedDatabase(bool accepted);
+    bool syncWithDatabase(const QSharedPointer<Database>& otherDb, QString& error);
+    void uploadAndFinishSync(const RemoteParams* params, RemoteHandler::RemoteResult result);
+    void finishSync(const RemoteParams* params, RemoteHandler::RemoteResult result);
     void emitCurrentModeChanged();
     // Database autoreload slots
     void reloadDatabaseFile();
     void restoreGroupEntryFocus(const QUuid& groupUuid, const QUuid& EntryUuid);
+    void onConfigChanged(Config::ConfigKey key);
 
 private:
     int addChildWidget(QWidget* w);
-    void setClipboardTextAndMinimize(const QString& text);
     void processAutoOpen();
     void openDatabaseFromEntry(const Entry* entry, bool inBackground = true);
     void performIconDownloads(const QList<Entry*>& entries, bool force = false, bool downloadInBackground = false);
@@ -299,6 +325,9 @@ private:
     QUuid m_entryBeforeLock;
 
     int m_saveAttempts;
+    bool m_attemptingLock = false;
+
+    QScopedPointer<RemoteSettings> m_remoteSettings;
 
     // Search state
     QScopedPointer<EntrySearcher> m_entrySearcher;

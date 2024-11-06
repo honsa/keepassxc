@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2022 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2024 KeePassXC Team <team@keepassxc.org>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -96,6 +96,11 @@ void TestImports::testOPUX()
     QVERIFY(entry);
     // Check custom group icon
     QVERIFY(!entry->group()->iconUuid().isNull());
+
+    // Check Category UUID 05 Passwords
+    entry = db->rootGroup()->findEntryByPath("/Personal/UUID 005 Password");
+    QVERIFY(entry);
+    QCOMPARE(entry->password(), QStringLiteral("uuid005password"));
 }
 
 void TestImports::testOPVault()
@@ -255,6 +260,8 @@ void TestImports::testBitwarden()
 void TestImports::testBitwardenEncrypted()
 {
     // We already tested the parser so just test that decryption works properly
+
+    // First test PBKDF2 password stretching (KDF Type 0)
     auto bitwardenPath =
         QStringLiteral("%1/%2").arg(KEEPASSX_TEST_DATA_DIR, QStringLiteral("/bitwarden_encrypted_export.json"));
 
@@ -264,4 +271,47 @@ void TestImports::testBitwardenEncrypted()
         QFAIL(qPrintable(reader.errorString()));
     }
     QVERIFY(db);
+
+    // Now test Argon2id password stretching (KDF Type 1)
+    bitwardenPath = QStringLiteral("%1/%2").arg(KEEPASSX_TEST_DATA_DIR,
+                                                QStringLiteral("/bitwarden_encrypted_argon2id_export.json"));
+
+    db = reader.convert(bitwardenPath, "a");
+    if (reader.hasError()) {
+        QFAIL(qPrintable(reader.errorString()));
+    }
+    QVERIFY(db);
+}
+
+void TestImports::testBitwardenPasskey()
+{
+    auto bitwardenPath =
+        QStringLiteral("%1/%2").arg(KEEPASSX_TEST_DATA_DIR, QStringLiteral("/bitwarden_passkey_export.json"));
+
+    BitwardenReader reader;
+    auto db = reader.convert(bitwardenPath);
+    QVERIFY2(!reader.hasError(), qPrintable(reader.errorString()));
+    QVERIFY(db);
+
+    // Confirm Login fields
+    auto entry = db->rootGroup()->findEntryByPath("/webauthn.io");
+    QVERIFY(entry);
+    QCOMPARE(entry->title(), QStringLiteral("webauthn.io"));
+    QCOMPARE(entry->username(), QStringLiteral("KPXC_BITWARDEN"));
+    QCOMPARE(entry->url(), QStringLiteral("https://webauthn.io/"));
+
+    // Confirm passkey attributes
+    auto attr = entry->attributes();
+    QCOMPARE(attr->value(EntryAttributes::KPEX_PASSKEY_CREDENTIAL_ID), QStringLiteral("o-FfiyfBQq6Qz6YVrYeFTw"));
+    QCOMPARE(
+        attr->value(EntryAttributes::KPEX_PASSKEY_PRIVATE_KEY_PEM),
+        QStringLiteral(
+            "-----BEGIN PRIVATE "
+            "KEY-----"
+            "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgmr4GQQjerojFuf0ZouOuUllMvAwxZSZAfB6gwDYcLiehRANCAAT0WR5zVS"
+            "p6ieusvjkLkzaGc7fjGBmwpiuLPxR/d+ZjqMI9L2DKh+takp6wGt2x0n4jzr1KA352NZg0vjZX9CHh-----END PRIVATE KEY-----"));
+    QCOMPARE(attr->value(EntryAttributes::KPEX_PASSKEY_USERNAME), QStringLiteral("KPXC_BITWARDEN"));
+    QCOMPARE(attr->value(EntryAttributes::KPEX_PASSKEY_RELYING_PARTY), QStringLiteral("webauthn.io"));
+    QCOMPARE(attr->value(EntryAttributes::KPEX_PASSKEY_USER_HANDLE),
+             QStringLiteral("aTFtdmFnOHYtS2dxVEJ0by1rSFpLWGg0enlTVC1iUVJReDZ5czJXa3c2aw"));
 }

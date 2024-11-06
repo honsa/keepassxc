@@ -97,6 +97,7 @@ public slots:
     void restartApp(const QString& message);
 
 protected:
+    bool event(QEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void hideEvent(QHideEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
@@ -105,7 +106,7 @@ protected:
     bool focusNextPrevChild(bool next) override;
 
 private slots:
-    void setMenuActionState(DatabaseWidget::Mode mode = DatabaseWidget::Mode::None);
+    void updateMenuActionState();
     void updateToolbarSeparatorVisibility();
     void updateWindowTitle();
     void showAboutDialog();
@@ -125,6 +126,7 @@ private slots:
     void switchToNewDatabase();
     void switchToOpenDatabase();
     void switchToDatabaseFile(const QString& file);
+    void updateRemoteSyncMenuEntries();
     void databaseStatusChanged(DatabaseWidget* dbWidget);
     void databaseTabChanged(int tabIndex);
     void openRecentDatabase(QAction* action);
@@ -150,6 +152,8 @@ private slots:
     void updateProgressBar(int percentage, QString message);
     void updateEntryCountLabel();
     void focusSearchWidget();
+    void enableMenuAndToolbar();
+    void disableMenuAndToolbar();
 
 private:
     static const QString BaseWindowTitle;
@@ -202,7 +206,6 @@ private:
     friend class MainWindowEventFilter;
 };
 
-#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
 class MainWindowEventFilter : public QObject
 {
     Q_OBJECT
@@ -210,8 +213,11 @@ class MainWindowEventFilter : public QObject
 public:
     explicit MainWindowEventFilter(QObject* parent);
     bool eventFilter(QObject* watched, QEvent* event) override;
+
+private:
+    QTimer m_menubarTimer;
+    QTimer m_altCoolDown;
 };
-#endif
 
 /**
  * Return instance of MainWindow created on app load

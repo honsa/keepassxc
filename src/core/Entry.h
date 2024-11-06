@@ -1,5 +1,5 @@
 /*
- *  Copyright (C) 2023 KeePassXC Team <team@keepassxc.org>
+ *  Copyright (C) 2024 KeePassXC Team <team@keepassxc.org>
  *  Copyright (C) 2010 Felix Geyer <debfx@fobos.de>
  *
  *  This program is free software: you can redistribute it and/or modify
@@ -120,8 +120,10 @@ public:
     bool excludeFromReports() const;
     void setExcludeFromReports(bool state);
 
-    bool hasTotp() const;
     bool hasPasskey() const;
+    void removePasskey();
+
+    bool hasTotp() const;
     bool isExpired() const;
     bool willExpireInDays(int days) const;
     bool isRecycled() const;
@@ -166,6 +168,8 @@ public:
     QList<Entry*> historyItems();
     const QList<Entry*>& historyItems() const;
     void addHistoryItem(Entry* entry);
+    void setHistoryOwner(Entry* entry);
+    Entry* historyOwner() const;
     void removeHistoryItems(const QList<Entry*>& historyEntries);
     void truncateHistory();
 
@@ -225,9 +229,6 @@ public:
     };
 
     static const int DefaultIconNumber;
-    static const int ResolveMaximumDepth;
-    static const QString AutoTypeSequenceUsername;
-    static const QString AutoTypeSequencePassword;
 
     /**
      * Creates a duplicate of this entry except that the returned entry isn't
@@ -295,6 +296,7 @@ private:
     QPointer<AutoTypeAssociations> m_autoTypeAssociations;
     QPointer<CustomData> m_customData;
     QList<Entry*> m_history; // Items sorted from oldest to newest
+    QPointer<Entry> m_historyOwner;
 
     QScopedPointer<Entry> m_tmpHistoryItem;
     bool m_modifiedSinceBegin;

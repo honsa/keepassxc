@@ -80,7 +80,7 @@ public:
 
     QJsonObject getDatabaseGroups();
     QJsonArray getDatabaseEntries();
-    QJsonObject createNewGroup(const QString& groupName);
+    QJsonObject createNewGroup(const QString& groupName, bool isPasskeysGroup = false);
     QString getCurrentTotp(const QString& uuid);
     void showPasswordGenerator(const KeyPairMessage& keyPairMessage);
     bool isPasswordGeneratorRequested() const;
@@ -90,11 +90,13 @@ public:
 #ifdef WITH_XC_BROWSER_PASSKEYS
     QJsonObject showPasskeysRegisterPrompt(const QJsonObject& publicKeyOptions,
                                            const QString& origin,
+                                           const QString& groupName,
                                            const StringPairList& keyList);
     QJsonObject showPasskeysAuthenticationPrompt(const QJsonObject& publicKeyOptions,
                                                  const QString& origin,
                                                  const StringPairList& keyList);
-    void addPasskeyToGroup(Group* group,
+    void addPasskeyToGroup(const QSharedPointer<Database>& db,
+                           Group* group,
                            const QString& url,
                            const QString& rpId,
                            const QString& rpName,
@@ -117,6 +119,7 @@ public:
                   const QSharedPointer<Database>& selectedDb = {});
     bool updateEntry(const EntryParameters& entryParameters, const QString& uuid);
     bool deleteEntry(const QString& uuid);
+    void removePluginData(Entry* entry) const;
     QJsonArray findEntries(const EntryParameters& entryParameters, const StringPairList& keyList, bool* entriesFound);
     void requestGlobalAutoType(const QString& search);
 

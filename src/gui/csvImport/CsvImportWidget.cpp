@@ -25,6 +25,7 @@
 #include "core/Totp.h"
 #include "format/CsvParser.h"
 #include "format/KeePass2Writer.h"
+#include "gui/MessageBox.h"
 #include "gui/csvImport/CsvParserModel.h"
 
 #include <QStringListModel>
@@ -39,9 +40,9 @@ namespace
             return group;
         }
 
-        auto nameList = groupPath.split("/", QString::SkipEmptyParts);
+        auto nameList = groupPath.split("/", Qt::SkipEmptyParts);
         // Skip over first group name if root
-        if (nameList.first().compare("root", Qt::CaseInsensitive)) {
+        if (nameList.first().compare("root", Qt::CaseInsensitive) == 0) {
             nameList.removeFirst();
         }
 
@@ -76,12 +77,7 @@ CsvImportWidget::CsvImportWidget(QWidget* parent)
                    << QObject::tr("URL") << QObject::tr("Notes") << QObject::tr("TOTP") << QObject::tr("Icon")
                    << QObject::tr("Last Modified") << QObject::tr("Created");
 
-    m_fieldSeparatorList << ","
-                         << ";"
-                         << "-"
-                         << ":"
-                         << "."
-                         << "\t";
+    m_fieldSeparatorList << "," << ";" << "-" << ":" << "." << "\t";
 
     m_combos << m_ui->groupCombo << m_ui->titleCombo << m_ui->usernameCombo << m_ui->passwordCombo << m_ui->urlCombo
              << m_ui->notesCombo << m_ui->totpCombo << m_ui->iconCombo << m_ui->lastModifiedCombo << m_ui->createdCombo;
@@ -213,19 +209,29 @@ void CsvImportWidget::parse()
 
 QSharedPointer<Database> CsvImportWidget::buildDatabase()
 {
+    // Warn if the title column wasn't specified
+    if (m_combos[1]->currentIndex() == 0) {
+        auto ans = MessageBox::question(
+            this,
+            tr("No Title Selected"),
+            tr("No title column was selected, entries will be hard to tell apart.\nAre you sure you want to import?"),
+            MessageBox::Continue | MessageBox::Cancel);
+        if (ans == MessageBox::Cancel) {
+            return {};
+        }
+    }
+
     auto db = QSharedPointer<Database>::create();
     db->rootGroup()->setNotes(tr("Imported from CSV file: %1").arg(m_filename));
 
-    for (int r = 0; r < m_parserModel->rowCount(); ++r) {
-        // use validity of second column as a GO/NOGO for all others fields
-        if (!m_parserModel->data(m_parserModel->index(r, 1)).isValid()) {
-            continue;
-        }
+    auto rows = m_parserModel->rowCount() - m_parserModel->skippedRows();
+    for (int r = 0; r < rows; ++r) {
         auto group = createGroupStructure(db.data(), m_parserModel->data(m_parserModel->index(r, 0)).toString());
         if (!group) {
             continue;
         }
 
+        // Standard entry fields
         auto entry = new Entry();
         entry->setUuid(QUuid::createUuid());
         entry->setGroup(group);
@@ -235,6 +241,7 @@ QSharedPointer<Database> CsvImportWidget::buildDatabase()
         entry->setUrl(m_parserModel->data(m_parserModel->index(r, 4)).toString());
         entry->setNotes(m_parserModel->data(m_parserModel->index(r, 5)).toString());
 
+        // TOTP
         auto otpString = m_parserModel->data(m_parserModel->index(r, 6));
         if (otpString.isValid() && !otpString.toString().isEmpty()) {
             auto totp = Totp::parseSettings(otpString.toString());
@@ -245,12 +252,14 @@ QSharedPointer<Database> CsvImportWidget::buildDatabase()
             entry->setTotp(totp);
         }
 
+        // Icon
         bool ok;
         int icon = m_parserModel->data(m_parserModel->index(r, 7)).toInt(&ok);
         if (ok) {
             entry->setIcon(icon);
         }
 
+        // Modified Time
         TimeInfo timeInfo;
         if (m_parserModel->data(m_parserModel->index(r, 8)).isValid()) {
             auto datetime = m_parserModel->data(m_parserModel->index(r, 8)).toString();
@@ -270,6 +279,7 @@ QSharedPointer<Database> CsvImportWidget::buildDatabase()
                 }
             }
         }
+        // Creation Time
         if (m_parserModel->data(m_parserModel->index(r, 9)).isValid()) {
             auto datetime = m_parserModel->data(m_parserModel->index(r, 9)).toString();
             if (datetime.contains(QRegularExpression("^\\d+$"))) {

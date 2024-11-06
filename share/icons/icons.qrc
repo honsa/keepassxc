@@ -6,6 +6,7 @@
         <file>application/256x256/apps/keepassxc.png</file>
 
         <file>application/scalable/actions/application-exit.svg</file>
+        <file>application/scalable/actions/arrow-collapse-down.svg</file>
         <file>application/scalable/actions/attributes-copy.svg</file>
         <file>application/scalable/actions/auto-type.svg</file>
         <file>application/scalable/actions/bitwarden.svg</file>
@@ -20,6 +21,7 @@
         <file>application/scalable/actions/database-lock-all.svg</file>
         <file>application/scalable/actions/database-merge.svg</file>
         <file>application/scalable/actions/database-search.svg</file>
+        <file>application/scalable/actions/database-settings.svg</file>
         <file>application/scalable/actions/dialog-close.svg</file>
         <file>application/scalable/actions/dialog-ok.svg</file>
         <file>application/scalable/actions/document-close.svg</file>
@@ -55,6 +57,9 @@
         <file>application/scalable/actions/hibp.svg</file>
         <file>application/scalable/actions/lock-question.svg</file>
         <file>application/scalable/actions/keyboard-shortcuts.svg</file>
+        <file>application/scalable/actions/lock.svg</file>
+        <file>application/scalable/actions/lock-open.svg</file>
+        <file>application/scalable/actions/lock-open-alert.svg</file>
         <file>application/scalable/actions/message-close.svg</file>
         <file>application/scalable/actions/move-down.svg</file>
         <file>application/scalable/actions/move-up.svg</file>
@@ -69,6 +74,7 @@
         <file>application/scalable/actions/password-show-on.svg</file>
         <file>application/scalable/actions/qrcode.svg</file>
         <file>application/scalable/actions/refresh.svg</file>
+        <file>application/scalable/actions/remote-sync.svg</file>
         <file>application/scalable/actions/reports.svg</file>
         <file>application/scalable/actions/reports-exclude.svg</file>
         <file>application/scalable/actions/sort-alphabetical-ascending.svg</file>

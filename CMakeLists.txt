@@ -395,7 +395,7 @@ if (MSVC)
     if(MSVC_TOOLSET_VERSION LESS 141)
         message(FATAL_ERROR "Only Microsoft Visual Studio 17 and newer are supported!")
     endif()
-    add_compile_options(/permissive- /utf-8)
+    add_compile_options(/permissive- /utf-8 /MP)
     if(IS_DEBUG_BUILD)
         add_compile_options(/Zf)
         if(MSVC_TOOLSET_VERSION GREATER 141)
@@ -467,7 +467,7 @@ if(WITH_COVERAGE)
     append_coverage_compiler_flags()
 
     set(COVERAGE_EXCLUDES
-            "'^(.+/)?(thirdparty|zxcvbn)/.*'"
+            "'^(.+/)?thirdparty/.*'"
             "'^(.+/)?main\\.cpp$$'"
             "'^(.+/)?cli/keepassxc-cli\\.cpp$$'"
             "'^(.+/)?proxy/keepassxc-proxy\\.cpp$$'")
@@ -512,14 +512,8 @@ else()
     find_package(Qt5 COMPONENTS ${QT_COMPONENTS} REQUIRED)
 endif()
 
-if(Qt5Core_VERSION VERSION_LESS "5.2.0")
-    message(FATAL_ERROR "Qt version 5.2.0 or higher is required")
-endif()
-
-# CBOR for Passkeys requires Qt 5.12
 if(Qt5Core_VERSION VERSION_LESS "5.12.0")
-    message(STATUS "Qt version 5.12.0 or higher is required for Passkeys support")
-    set(WITH_XC_BROWSER_PASSKEYS OFF)
+    message(FATAL_ERROR "Qt version 5.12.0 or higher is required")
 endif()
 
 get_filename_component(Qt5_PREFIX ${Qt5_DIR}/../../.. REALPATH)
@@ -612,6 +606,12 @@ if(UNIX)
 endif()
 
 include_directories(SYSTEM ${ZLIB_INCLUDE_DIR})
+
+find_library(ZXCVBN_LIBRARIES zxcvbn)
+if(NOT ZXCVBN_LIBRARIES)
+    add_subdirectory(src/thirdparty/zxcvbn)
+    set(ZXCVBN_LIBRARIES zxcvbn)
+endif(NOT ZXCVBN_LIBRARIES)
 
 add_subdirectory(src)
 add_subdirectory(share)
